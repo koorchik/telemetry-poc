@@ -28,6 +28,10 @@ export function generateHTML(data, filename) {
   for (const lap of laps) {
     const ld = allLapsData[lap];
     if (!ld) continue;
+
+    // Calculate speed extrema for each lap
+    const lapSpeedExtrema = findSpeedExtrema(ld.groundTruth);
+
     lapsMapData[lap] = {
       groundTruth: toCoords(downsample(ld.groundTruth)),
       cleanGPS: toCoords(ld.cleanGPS),
@@ -39,6 +43,7 @@ export function generateHTML(data, filename) {
       cleanMetrics: ld.cleanMetrics,
       noisyMetrics: ld.noisyMetrics,
       duration: ld.duration,
+      speedExtrema: lapSpeedExtrema,
     };
   }
 
@@ -158,16 +163,21 @@ export function generateHTML(data, filename) {
     .metrics-table th { font-weight: 600; color: #6b7280; }
     .metrics-table .best { background: #dcfce7; }
 
+    .speed-label {
+      background: transparent !important;
+      border: none !important;
+    }
     .speed-marker {
-      font-size: 11px;
+      font-size: 12px;
       font-weight: bold;
       text-align: center;
       border-radius: 4px;
-      padding: 2px 4px;
+      padding: 3px 6px;
       white-space: nowrap;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
-    .speed-min { background: #fee2e2; color: #dc2626; border: 1px solid #dc2626; }
-    .speed-max { background: #dcfce7; color: #16a34a; border: 1px solid #16a34a; }
+    .speed-min { background: #fee2e2; color: #dc2626; border: 2px solid #dc2626; }
+    .speed-max { background: #dcfce7; color: #16a34a; border: 2px solid #16a34a; }
 
     .info-footer {
       margin-top: 16px;
@@ -234,6 +244,7 @@ export function generateHTML(data, filename) {
       gpsPoints: { label: 'GPS Points', color: '#ef4444', visible: true },
       linear: { label: 'Linear Interp.', color: '#f97316', visible: false },
       spline: { label: 'Spline', color: '#2563eb', visible: true },
+      speedLabels: { label: 'Speed Labels', color: '#8b5cf6', visible: true },
     };
 
     // Get current lap data
@@ -272,6 +283,35 @@ export function generateHTML(data, filename) {
       leafletLayers.spline = L.polyline(ld[prefix + 'Spline'], {
         color: '#2563eb', weight: 3, opacity: 0.9
       });
+
+      // Speed Labels (min = braking points, max = acceleration peaks)
+      leafletLayers.speedLabels = L.layerGroup();
+      if (ld.speedExtrema) {
+        // Min speed points (braking/corner apex) - red
+        ld.speedExtrema.minPoints.forEach((p, i) => {
+          const icon = L.divIcon({
+            className: 'speed-label',
+            html: '<div class="speed-marker speed-min">' + p.speedKmh + '</div>',
+            iconSize: [50, 20],
+            iconAnchor: [25, 10]
+          });
+          L.marker([p.lat, p.lon], { icon: icon })
+            .bindPopup('<b>Braking Point #' + (i+1) + '</b><br>Speed: ' + p.speedKmh + ' km/h<br><i>Transition: accel → brake</i>')
+            .addTo(leafletLayers.speedLabels);
+        });
+        // Max speed points (acceleration peaks) - green
+        ld.speedExtrema.maxPoints.forEach((p, i) => {
+          const icon = L.divIcon({
+            className: 'speed-label',
+            html: '<div class="speed-marker speed-max">' + p.speedKmh + '</div>',
+            iconSize: [50, 20],
+            iconAnchor: [25, 10]
+          });
+          L.marker([p.lat, p.lon], { icon: icon })
+            .bindPopup('<b>Top Speed #' + (i+1) + '</b><br>Speed: ' + p.speedKmh + ' km/h<br><i>Transition: brake → accel</i>')
+            .addTo(leafletLayers.speedLabels);
+        });
+      }
 
       // Add visible layers
       Object.keys(LAYERS).forEach(key => {
