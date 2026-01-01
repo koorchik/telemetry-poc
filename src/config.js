@@ -19,8 +19,8 @@ const CONFIG = {
   // GPS noise simulation
   noise: {
     enabled: true,  // Enable for testing
-    minMeters: 3,
-    maxMeters: 8,
+    minMeters: 1,
+    maxMeters: 3,
   },
 
   // GPS-only Kalman Filter (for comparison)
@@ -46,7 +46,7 @@ const CONFIG = {
     // Simple method thresholds (fallback)
     maxSpeedKmh: 250,
     maxJumpMeters: 50,
-    // Physics method thresholds (tuned for 3-8m GPS noise)
+    // Physics method thresholds (tuned for 1-3m GPS noise)
     maxAccelG: 2.0,           // Max expected acceleration (G)
     maxYawRateDiff: 45,       // deg/s tolerance between GPS and IMU
     maxSpeedDiff: 15,         // m/s tolerance for speed consistency
