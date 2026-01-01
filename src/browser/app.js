@@ -5,7 +5,8 @@
  */
 
 import { processCSV } from "./process.js";
-import { initVisualization } from "./visualization.js";
+// Import component to register custom element
+import "./components/telemetry-app.js";
 
 // =====================================================
 // UI Elements
@@ -68,7 +69,13 @@ function showVisualization(data) {
   vizSection.style.display = "block";
   backBtn.style.display = "block";
 
-  currentViz = initVisualization(vizSection, data);
+  // Create telemetry-app component and set data
+  const app = document.createElement("telemetry-app");
+  app.processedData = data;
+  vizSection.innerHTML = "";
+  vizSection.appendChild(app);
+  currentViz = app;
+
   hideProgress();
 }
 
