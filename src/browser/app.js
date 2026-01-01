@@ -4,7 +4,6 @@
  * @module browser/app
  */
 
-import { SAMPLE_CSV } from '../data/sample-data.js';
 import { processCSV } from './process.js';
 import { initVisualization } from './visualization.js';
 
@@ -129,11 +128,20 @@ fileInput.addEventListener('change', (e) => {
 });
 
 // Load example
-loadExampleBtn.addEventListener('click', () => {
+loadExampleBtn.addEventListener('click', async () => {
   showProgress('Loading example data...');
-  setTimeout(() => {
-    processAndVisualize(SAMPLE_CSV);
-  }, 50);
+  try {
+    const response = await fetch('src/data/sample-data.csv');
+    if (!response.ok) {
+      throw new Error(`Failed to load example data: ${response.status}`);
+    }
+    const csvText = await response.text();
+    processAndVisualize(csvText);
+  } catch (err) {
+    console.error('Error loading example data:', err);
+    alert('Error loading example data: ' + err.message);
+    hideProgress();
+  }
 });
 
 // Back button

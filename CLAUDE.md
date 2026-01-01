@@ -22,7 +22,7 @@ python3 -m http.server 8080
 
 Features:
 - Drag & drop CSV upload or click to browse
-- "Load Example Data" button with embedded sample
+- "Load Example Data" button (fetches sample on demand)
 - All processing runs in browser (no server needed for computation)
 - Full metrics report (RMSE, MAE, Max Error) for all algorithms
 - Outlier detection statistics
@@ -38,7 +38,7 @@ src/
 │   ├── process.js     # Processing pipeline
 │   └── visualization.js # Map/chart/metrics rendering
 ├── data/
-│   └── sample-data.js # Embedded example CSV (~6.8MB)
+│   └── sample-data.csv # Example CSV loaded on demand (~6.8MB)
 ├── io/
 │   └── csv-parser.js  # CSV parsing (browser-only)
 ├── gps/
