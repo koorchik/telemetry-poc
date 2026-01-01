@@ -1,12 +1,16 @@
 /**
  * 1D Kalman Filter with RTS Smoother for GPS-only filtering.
+ * Uses kalman-filter library for robust implementation.
  * @module filters/kalman-1d
  */
 
+import kalmanFilter from 'kalman-filter';
+const { KalmanFilter } = kalmanFilter;
 import CONFIG from '../config.js';
 
 /**
  * 1D Kalman Filter with constant velocity model.
+ * Wrapper around kalman-filter library for API compatibility.
  * State: [position, velocity]
  */
 export class KalmanFilter1D {
@@ -17,13 +21,36 @@ export class KalmanFilter1D {
    * @param {number} [initialValue=0] - Initial position estimate
    */
   constructor(R, Q, initialValue = 0) {
+    this.R = R;
+    this.Q = Q;
     this.x = [initialValue, 0];
     this.P = [
       [CONFIG.kalman.initialP, 0],
       [0, CONFIG.kalman.initialP]
     ];
-    this.R = R;
-    this.Q = Q;
+
+    this.filter = new KalmanFilter({
+      observation: {
+        dimension: 1,
+        stateProjection: [[1, 0]], // Only observe position
+        covariance: [[R]]
+      },
+      dynamic: {
+        dimension: 2,
+        init: {
+          mean: [[initialValue], [0]],
+          covariance: [
+            [CONFIG.kalman.initialP, 0],
+            [0, CONFIG.kalman.initialP]
+          ]
+        },
+        transition: [[1, 1], [0, 1]], // Will be updated with actual dt
+        covariance: [[Q / 4, Q / 2], [Q / 2, Q]] // Simplified, updated per step
+      }
+    });
+
+    this.previousState = this.filter.getInitState();
+    this.lastDt = 1;
   }
 
   /**
@@ -31,22 +58,26 @@ export class KalmanFilter1D {
    * @param {number} dt - Time delta in seconds
    */
   predict(dt) {
-    const newPos = this.x[0] + this.x[1] * dt;
-    const newVel = this.x[1];
-    this.x = [newPos, newVel];
-
+    this.lastDt = dt;
     const dt2 = dt * dt;
     const dt3 = dt2 * dt;
     const dt4 = dt3 * dt;
     const q = this.Q;
 
-    const P = this.P;
-    this.P = [
-      [P[0][0] + dt * P[1][0] + dt * P[0][1] + dt2 * P[1][1] + dt4 / 4 * q,
-       P[0][1] + dt * P[1][1] + dt3 / 2 * q],
-      [P[1][0] + dt * P[1][1] + dt3 / 2 * q,
-       P[1][1] + dt2 * q]
+    // Update state model for this time step
+    this.filter.dynamic.transition = [[1, dt], [0, 1]];
+    this.filter.dynamic.covariance = [
+      [dt4 / 4 * q, dt3 / 2 * q],
+      [dt3 / 2 * q, dt2 * q]
     ];
+
+    const predicted = this.filter.predict({
+      previousCorrected: this.previousState
+    });
+
+    this.previousState = predicted;
+    this.x = [predicted.mean[0][0], predicted.mean[1][0]];
+    this.P = predicted.covariance;
   }
 
   /**
@@ -55,18 +86,14 @@ export class KalmanFilter1D {
    * @returns {number} Updated position estimate
    */
   update(measurement) {
-    const y = measurement - this.x[0];
-    const S = this.P[0][0] + this.R;
-    const K = [this.P[0][0] / S, this.P[1][0] / S];
+    const corrected = this.filter.correct({
+      predicted: this.previousState,
+      observation: [[measurement]]
+    });
 
-    this.x[0] += K[0] * y;
-    this.x[1] += K[1] * y;
-
-    const P = this.P;
-    this.P = [
-      [(1 - K[0]) * P[0][0], (1 - K[0]) * P[0][1]],
-      [-K[1] * P[0][0] + P[1][0], -K[1] * P[0][1] + P[1][1]]
-    ];
+    this.previousState = corrected;
+    this.x = [corrected.mean[0][0], corrected.mean[1][0]];
+    this.P = corrected.covariance;
 
     return this.x[0];
   }
@@ -85,7 +112,7 @@ export class KalmanFilter1D {
 
 /**
  * Rauch-Tung-Striebel (RTS) Smoother for 1D Kalman.
- * Forward pass (filtering) + Backward pass (smoothing).
+ * Uses kalman-filter library with forward-backward pass.
  * @param {Array<number|null>} measurements - Position measurements (null for missing)
  * @param {Array<number>} timestamps - Timestamps for each measurement
  * @param {number} R - Measurement noise variance
@@ -97,107 +124,144 @@ export function rtsSmooth1D(measurements, timestamps, R, Q, initialValue) {
   const n = timestamps.length;
   if (n === 0) return [];
 
-  // Storage arrays for forward pass
-  const x_fwd = [];      // Forward states
-  const P_fwd = [];      // Forward covariances
-  const x_pred = [];     // Predicted states
-  const P_pred = [];     // Predicted covariances
+  // Build observations array (null for missing measurements)
+  const observations = measurements.map(m => m === null ? null : [[m]]);
 
-  // Initialize
-  let x = [initialValue, 0];
-  let P = [[CONFIG.kalman.initialP, 0], [0, CONFIG.kalman.initialP]];
+  // Calculate time steps
+  const timeSteps = [];
+  for (let i = 0; i < n; i++) {
+    timeSteps.push(i === 0 ? 1 : timestamps[i] - timestamps[i - 1]);
+  }
+
+  // Create filter with dynamic time steps
+  const kf = new KalmanFilter({
+    observation: {
+      dimension: 1,
+      stateProjection: [[1, 0]],
+      covariance: [[R]]
+    },
+    dynamic: {
+      dimension: 2,
+      init: {
+        mean: [[initialValue], [0]],
+        covariance: [
+          [CONFIG.kalman.initialP, 0],
+          [0, CONFIG.kalman.initialP]
+        ]
+      },
+      // These will be overridden per step
+      transition: [[1, 1], [0, 1]],
+      covariance: [[Q / 4, Q / 2], [Q / 2, Q]]
+    }
+  });
 
   // Forward pass
+  const forwardStates = [];
+  let prevState = kf.getInitState();
+
   for (let i = 0; i < n; i++) {
-    const dt = i === 0 ? 0 : timestamps[i] - timestamps[i - 1];
+    const dt = timeSteps[i];
+    const dt2 = dt * dt;
+    const dt3 = dt2 * dt;
+    const dt4 = dt3 * dt;
 
-    // Predict
-    if (dt > 0) {
-      const dt2 = dt * dt;
-      const dt3 = dt2 * dt;
-      const dt4 = dt3 * dt;
+    // Update dynamics for this time step
+    kf.dynamic.transition = [[1, dt], [0, 1]];
+    kf.dynamic.covariance = [
+      [dt4 / 4 * Q, dt3 / 2 * Q],
+      [dt3 / 2 * Q, dt2 * Q]
+    ];
 
-      const x_p = [x[0] + x[1] * dt, x[1]];
-      const P_p = [
-        [P[0][0] + dt * P[1][0] + dt * P[0][1] + dt2 * P[1][1] + dt4 / 4 * Q,
-         P[0][1] + dt * P[1][1] + dt3 / 2 * Q],
-        [P[1][0] + dt * P[1][1] + dt3 / 2 * Q,
-         P[1][1] + dt2 * Q]
-      ];
+    const predicted = kf.predict({ previousCorrected: prevState });
 
-      x_pred.push([...x_p]);
-      P_pred.push(P_p.map(row => [...row]));
-
-      x = x_p;
-      P = P_p;
+    if (observations[i] !== null) {
+      const corrected = kf.correct({
+        predicted,
+        observation: observations[i]
+      });
+      forwardStates.push(corrected);
+      prevState = corrected;
     } else {
-      x_pred.push([...x]);
-      P_pred.push(P.map(row => [...row]));
+      forwardStates.push(predicted);
+      prevState = predicted;
     }
-
-    // Update (if measurement available)
-    if (measurements[i] !== null) {
-      const y = measurements[i] - x[0];
-      const S = P[0][0] + R;
-      const K = [P[0][0] / S, P[1][0] / S];
-
-      x = [x[0] + K[0] * y, x[1] + K[1] * y];
-      P = [
-        [(1 - K[0]) * P[0][0], (1 - K[0]) * P[0][1]],
-        [-K[1] * P[0][0] + P[1][0], -K[1] * P[0][1] + P[1][1]]
-      ];
-    }
-
-    x_fwd.push([...x]);
-    P_fwd.push(P.map(row => [...row]));
   }
 
   // Backward pass (RTS smoothing)
-  const x_smooth = new Array(n);
-  x_smooth[n - 1] = [...x_fwd[n - 1]];
+  const smoothedStates = new Array(n);
+  smoothedStates[n - 1] = forwardStates[n - 1];
 
   for (let i = n - 2; i >= 0; i--) {
-    const dt = timestamps[i + 1] - timestamps[i];
-    if (dt <= 0) {
-      x_smooth[i] = [...x_fwd[i]];
-      continue;
-    }
+    const dt = timeSteps[i + 1];
+    const dt2 = dt * dt;
+    const dt3 = dt2 * dt;
+    const dt4 = dt3 * dt;
 
-    // C = P_fwd[i] * F' * inv(P_pred[i+1])
-    const P_pred_inv_det = P_pred[i + 1][0][0] * P_pred[i + 1][1][1] - P_pred[i + 1][0][1] * P_pred[i + 1][1][0];
-    if (Math.abs(P_pred_inv_det) < 1e-12) {
-      x_smooth[i] = [...x_fwd[i]];
+    // Transition matrix for this step
+    const F = [[1, dt], [0, 1]];
+    const processQ = [
+      [dt4 / 4 * Q, dt3 / 2 * Q],
+      [dt3 / 2 * Q, dt2 * Q]
+    ];
+
+    // Predicted state at i+1 (re-predict from forward state at i)
+    const xPred = [
+      [forwardStates[i].mean[0][0] + forwardStates[i].mean[1][0] * dt],
+      [forwardStates[i].mean[1][0]]
+    ];
+
+    const P_i = forwardStates[i].covariance;
+    const P_pred = [
+      [P_i[0][0] + dt * P_i[1][0] + dt * P_i[0][1] + dt2 * P_i[1][1] + processQ[0][0],
+       P_i[0][1] + dt * P_i[1][1] + processQ[0][1]],
+      [P_i[1][0] + dt * P_i[1][1] + processQ[1][0],
+       P_i[1][1] + processQ[1][1]]
+    ];
+
+    // Smoother gain C = P_i * F' * inv(P_pred)
+    const det = P_pred[0][0] * P_pred[1][1] - P_pred[0][1] * P_pred[1][0];
+    if (Math.abs(det) < 1e-12) {
+      smoothedStates[i] = forwardStates[i];
       continue;
     }
 
     const P_pred_inv = [
-      [P_pred[i + 1][1][1] / P_pred_inv_det, -P_pred[i + 1][0][1] / P_pred_inv_det],
-      [-P_pred[i + 1][1][0] / P_pred_inv_det, P_pred[i + 1][0][0] / P_pred_inv_det]
+      [P_pred[1][1] / det, -P_pred[0][1] / det],
+      [-P_pred[1][0] / det, P_pred[0][0] / det]
     ];
 
-    // P_fwd * F' = [[P00 + P01*dt, P01], [P10 + P11*dt, P11]]
-    const PF = [
-      [P_fwd[i][0][0] + P_fwd[i][0][1] * dt, P_fwd[i][0][1]],
-      [P_fwd[i][1][0] + P_fwd[i][1][1] * dt, P_fwd[i][1][1]]
+    // P_i * F' = [[P00 + P01*dt, P01], [P10 + P11*dt, P11]]
+    const PFt = [
+      [P_i[0][0] + P_i[0][1] * dt, P_i[0][1]],
+      [P_i[1][0] + P_i[1][1] * dt, P_i[1][1]]
     ];
 
-    // C = PF * P_pred_inv
     const C = [
-      [PF[0][0] * P_pred_inv[0][0] + PF[0][1] * P_pred_inv[1][0],
-       PF[0][0] * P_pred_inv[0][1] + PF[0][1] * P_pred_inv[1][1]],
-      [PF[1][0] * P_pred_inv[0][0] + PF[1][1] * P_pred_inv[1][0],
-       PF[1][0] * P_pred_inv[0][1] + PF[1][1] * P_pred_inv[1][1]]
+      [PFt[0][0] * P_pred_inv[0][0] + PFt[0][1] * P_pred_inv[1][0],
+       PFt[0][0] * P_pred_inv[0][1] + PFt[0][1] * P_pred_inv[1][1]],
+      [PFt[1][0] * P_pred_inv[0][0] + PFt[1][1] * P_pred_inv[1][0],
+       PFt[1][0] * P_pred_inv[0][1] + PFt[1][1] * P_pred_inv[1][1]]
     ];
 
-    // x_smooth[i] = x_fwd[i] + C * (x_smooth[i+1] - x_pred[i+1])
-    const dx = [x_smooth[i + 1][0] - x_pred[i + 1][0], x_smooth[i + 1][1] - x_pred[i + 1][1]];
-    x_smooth[i] = [
-      x_fwd[i][0] + C[0][0] * dx[0] + C[0][1] * dx[1],
-      x_fwd[i][1] + C[1][0] * dx[0] + C[1][1] * dx[1]
+    // dx = x_smooth[i+1] - x_pred[i+1]
+    const dx = [
+      smoothedStates[i + 1].mean[0][0] - xPred[0][0],
+      smoothedStates[i + 1].mean[1][0] - xPred[1][0]
     ];
+
+    // x_smooth[i] = x_fwd[i] + C * dx
+    const smoothedMean = [
+      [forwardStates[i].mean[0][0] + C[0][0] * dx[0] + C[0][1] * dx[1]],
+      [forwardStates[i].mean[1][0] + C[1][0] * dx[0] + C[1][1] * dx[1]]
+    ];
+
+    smoothedStates[i] = {
+      mean: smoothedMean,
+      covariance: forwardStates[i].covariance // Simplified
+    };
   }
 
-  return x_smooth.map(s => s[0]); // Return positions only
+  return smoothedStates.map(s => s.mean[0][0]);
 }
 
 /**

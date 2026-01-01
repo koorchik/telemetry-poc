@@ -4,7 +4,15 @@
  * @module browser/visualization
  */
 
+import chroma from 'chroma-js';
 import { findSpeedExtrema } from '../analysis/speed-extrema.js';
+import {
+  interpolateAtPosition,
+  interpolateAtTime,
+  positionToTime,
+  timeToPosition,
+  interpolateBearing,
+} from '../math/interpolation.js';
 
 // =====================================================
 // STYLES
@@ -318,9 +326,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   text-align: left;
   border-bottom: 1px solid #2d3748;
 }
+.metrics-table th:not(:first-child), .metrics-table td:not(:first-child) { text-align: right; }
 .metrics-table th { font-weight: 600; color: #718096; }
 .metrics-table td { color: #e2e8f0; }
 .metrics-table .best { background: rgba(16, 185, 129, 0.2); }
+
+.outlier-stats {
+  font-size: 11px;
+  color: #a0aec0;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: rgba(45, 55, 72, 0.5);
+  border-radius: 4px;
+}
+.metrics-header {
+  font-size: 11px;
+  color: #718096;
+  margin: 12px 0 6px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.metrics-header:first-of-type { margin-top: 0; }
 `;
 
 // =====================================================
@@ -385,7 +411,7 @@ function createHTML(laps, selectedLap) {
       </div>
 
       <div class="metrics-section">
-        <h3>Accuracy Metrics (RMSE)</h3>
+        <h3>Algorithm Accuracy Metrics</h3>
         <div id="metrics-container"></div>
       </div>
     </div>
@@ -476,6 +502,7 @@ export class TelemetryVisualization {
       lastFrameTime: null,
     };
     this.leafletLayers = {};
+    this.comparisonTrackLayer = null;
     this.carMarker = null;
     this.comparisonMarker = null;
     this.charts = {};
@@ -487,7 +514,9 @@ export class TelemetryVisualization {
       gpsPoints: { label: 'GPS Points (1Hz)', color: '#ef4444', visible: false },
       linear: { label: 'Linear Interp.', color: '#f97316', visible: false },
       spline: { label: 'Spline', color: '#2563eb', visible: false },
-      speedLabels: { label: 'Speed Labels', color: '#8b5cf6', visible: true },
+      ekfRaw: { label: 'EKF Raw', color: '#ec4899', visible: false },
+      ekfSmooth: { label: 'EKF + Spline', color: '#8b5cf6', visible: false },
+      speedLabels: { label: 'Speed Labels', color: '#a855f7', visible: true },
     };
   }
 
@@ -521,10 +550,15 @@ export class TelemetryVisualization {
         noisyGPS: toCoords(ld.noisyGPS),
         cleanLinear: toCoords(downsample(ld.cleanLinear)),
         cleanSpline: toCoords(downsample(ld.cleanSpline)),
+        cleanEkfRaw: toCoords(downsample(ld.cleanEkfRaw || [])),
+        cleanEkfSmooth: toCoords(downsample(ld.cleanEkfSmooth || [])),
         noisyLinear: toCoords(downsample(ld.noisyLinear)),
         noisySpline: toCoords(downsample(ld.noisySpline)),
+        noisyEkfRaw: toCoords(downsample(ld.noisyEkfRaw || [])),
+        noisyEkfSmooth: toCoords(downsample(ld.noisyEkfSmooth || [])),
         cleanMetrics: ld.cleanMetrics,
         noisyMetrics: ld.noisyMetrics,
+        outliers: ld.outliers,
         duration: ld.duration,
         totalDistance: ld.totalDistance,
         chartData: ld.chartData,
@@ -620,11 +654,24 @@ export class TelemetryVisualization {
 
   initMap() {
     this.map = L.map('map');
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+    // Base tile layers
+    const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap',
       maxZoom: 21,
       maxNativeZoom: 19
-    }).addTo(this.map);
+    });
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '© Esri',
+      maxZoom: 21,
+      maxNativeZoom: 18
+    });
+
+    // Add default layer and layer control
+    osmLayer.addTo(this.map);
+    L.control.layers({ 'Street': osmLayer, 'Satellite': satelliteLayer }, null, { position: 'bottomleft' }).addTo(this.map);
+
     this.map.fitBounds(this.data.bounds, { padding: [30, 30] });
 
     // Car markers
@@ -706,126 +753,15 @@ export class TelemetryVisualization {
     return this.data.lapsData[this.state.comparisonLap];
   }
 
-  interpolateAtPosition(data, targetPos) {
-    if (!data || data.length === 0) return null;
-    if (targetPos <= 0) return data[0];
-    if (targetPos >= 1) return data[data.length - 1];
-
-    let low = 0, high = data.length - 1;
-    while (low < high - 1) {
-      const mid = Math.floor((low + high) / 2);
-      if (data[mid].lapPosition <= targetPos) low = mid;
-      else high = mid;
-    }
-
-    const p1 = data[low];
-    const p2 = data[high];
-    if (p2.lapPosition === p1.lapPosition) return p1;
-
-    const t = (targetPos - p1.lapPosition) / (p2.lapPosition - p1.lapPosition);
-
-    return {
-      lat: p1.lat + t * (p2.lat - p1.lat),
-      lon: p1.lon + t * (p2.lon - p1.lon),
-      speed: (p1.speed + t * (p2.speed - p1.speed)) * 3.6,
-      bearing: this.interpolateBearing(p1.bearing || 0, p2.bearing || 0, t),
-      lapTime: p1.lapTime + t * (p2.lapTime - p1.lapTime),
-      distance: p1.distance + t * (p2.distance - p1.distance),
-      lateralAcc: (p1.lateralAcc || 0) + t * ((p2.lateralAcc || 0) - (p1.lateralAcc || 0)),
-      longitudinalAcc: (p1.longitudinalAcc || 0) + t * ((p2.longitudinalAcc || 0) - (p1.longitudinalAcc || 0)),
-    };
-  }
-
-  interpolateBearing(b1, b2, t) {
-    let diff = b2 - b1;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
-    let result = b1 + t * diff;
-    if (result < 0) result += 360;
-    if (result >= 360) result -= 360;
-    return result;
-  }
-
-  timeToPosition(data, targetTime) {
-    if (!data || data.length === 0) return 0;
-    if (targetTime <= 0) return 0;
-    if (targetTime >= data[data.length - 1].lapTime) return 1;
-
-    let low = 0, high = data.length - 1;
-    while (low < high - 1) {
-      const mid = Math.floor((low + high) / 2);
-      if (data[mid].lapTime <= targetTime) low = mid;
-      else high = mid;
-    }
-
-    const p1 = data[low];
-    const p2 = data[high];
-    if (p2.lapTime === p1.lapTime) return p1.lapPosition;
-
-    const t = (targetTime - p1.lapTime) / (p2.lapTime - p1.lapTime);
-    return p1.lapPosition + t * (p2.lapPosition - p1.lapPosition);
-  }
-
-  positionToTime(data, targetPos) {
-    if (!data || data.length === 0) return 0;
-    if (targetPos <= 0) return 0;
-    if (targetPos >= 1) return data[data.length - 1].lapTime;
-
-    let low = 0, high = data.length - 1;
-    while (low < high - 1) {
-      const mid = Math.floor((low + high) / 2);
-      if (data[mid].lapPosition <= targetPos) low = mid;
-      else high = mid;
-    }
-
-    const p1 = data[low];
-    const p2 = data[high];
-    if (p2.lapPosition === p1.lapPosition) return p1.lapTime;
-
-    const t = (targetPos - p1.lapPosition) / (p2.lapPosition - p1.lapPosition);
-    return p1.lapTime + t * (p2.lapTime - p1.lapTime);
-  }
-
-  interpolateAtTime(data, targetTime) {
-    if (!data || data.length === 0) return null;
-    if (targetTime <= 0) return data[0];
-    if (targetTime >= data[data.length - 1].lapTime) return data[data.length - 1];
-
-    let low = 0, high = data.length - 1;
-    while (low < high - 1) {
-      const mid = Math.floor((low + high) / 2);
-      if (data[mid].lapTime <= targetTime) low = mid;
-      else high = mid;
-    }
-
-    const p1 = data[low];
-    const p2 = data[high];
-    if (p2.lapTime === p1.lapTime) return p1;
-
-    const t = (targetTime - p1.lapTime) / (p2.lapTime - p1.lapTime);
-
-    return {
-      lat: p1.lat + t * (p2.lat - p1.lat),
-      lon: p1.lon + t * (p2.lon - p1.lon),
-      speed: (p1.speed + t * (p2.speed - p1.speed)) * 3.6,
-      bearing: this.interpolateBearing(p1.bearing || 0, p2.bearing || 0, t),
-      lapTime: targetTime,
-      lapPosition: p1.lapPosition + t * (p2.lapPosition - p1.lapPosition),
-      distance: p1.distance + t * (p2.distance - p1.distance),
-      lateralAcc: (p1.lateralAcc || 0) + t * ((p2.lateralAcc || 0) - (p1.lateralAcc || 0)),
-      longitudinalAcc: (p1.longitudinalAcc || 0) + t * ((p2.longitudinalAcc || 0) - (p1.longitudinalAcc || 0)),
-    };
-  }
-
   setPosition(pos, updateCharts = true) {
     this.state.currentPosition = Math.max(0, Math.min(1, pos));
 
     const ld = this.getLapData();
     if (!ld) return;
 
-    this.state.currentTime = this.positionToTime(ld.fullGroundTruth, this.state.currentPosition);
+    this.state.currentTime = positionToTime(ld.fullGroundTruth, this.state.currentPosition);
 
-    const telem = this.interpolateAtPosition(ld.fullGroundTruth, this.state.currentPosition);
+    const telem = interpolateAtPosition(ld.fullGroundTruth, this.state.currentPosition);
     if (telem && this.carMarker) {
       this.carMarker.setLatLng([telem.lat, telem.lon]);
       if (!this.map.hasLayer(this.carMarker)) this.carMarker.addTo(this.map);
@@ -834,13 +770,13 @@ export class TelemetryVisualization {
     if (this.state.comparisonLap) {
       const compData = this.getComparisonData();
       if (compData) {
-        const compTelem = this.interpolateAtTime(compData.fullGroundTruth, this.state.currentTime);
+        const compTelem = interpolateAtTime(compData.fullGroundTruth, this.state.currentTime);
         if (compTelem && this.comparisonMarker) {
           this.comparisonMarker.setLatLng([compTelem.lat, compTelem.lon]);
           if (!this.map.hasLayer(this.comparisonMarker)) this.comparisonMarker.addTo(this.map);
         }
 
-        const compTimeAtSamePos = this.positionToTime(compData.fullGroundTruth, this.state.currentPosition);
+        const compTimeAtSamePos = positionToTime(compData.fullGroundTruth, this.state.currentPosition);
         const timeDelta = compTimeAtSamePos - this.state.currentTime;
         this.updateDeltaDisplay(timeDelta);
       }
@@ -861,7 +797,7 @@ export class TelemetryVisualization {
     const ld = this.getLapData();
     if (!ld) return;
 
-    const telem = this.interpolateAtPosition(ld.fullGroundTruth, this.state.currentPosition);
+    const telem = interpolateAtPosition(ld.fullGroundTruth, this.state.currentPosition);
     if (telem && this.carMarker) {
       this.carMarker.setLatLng([telem.lat, telem.lon]);
       if (!this.map.hasLayer(this.carMarker)) this.carMarker.addTo(this.map);
@@ -870,13 +806,13 @@ export class TelemetryVisualization {
     if (this.state.comparisonLap) {
       const compData = this.getComparisonData();
       if (compData) {
-        const compTelem = this.interpolateAtTime(compData.fullGroundTruth, this.state.currentTime);
+        const compTelem = interpolateAtTime(compData.fullGroundTruth, this.state.currentTime);
         if (compTelem && this.comparisonMarker) {
           this.comparisonMarker.setLatLng([compTelem.lat, compTelem.lon]);
           if (!this.map.hasLayer(this.comparisonMarker)) this.comparisonMarker.addTo(this.map);
         }
 
-        const compTimeAtSamePos = this.positionToTime(compData.fullGroundTruth, this.state.currentPosition);
+        const compTimeAtSamePos = positionToTime(compData.fullGroundTruth, this.state.currentPosition);
         const timeDelta = compTimeAtSamePos - telem.lapTime;
         this.updateDeltaDisplay(timeDelta);
       }
@@ -993,7 +929,7 @@ export class TelemetryVisualization {
       this.state.currentTime = 0;
     }
 
-    const pos = this.timeToPosition(ld.fullGroundTruth, this.state.currentTime);
+    const pos = timeToPosition(ld.fullGroundTruth, this.state.currentTime);
     this.setPositionFromTime(pos, this.state.currentTime);
 
     requestAnimationFrame(() => this.animate());
@@ -1019,7 +955,7 @@ export class TelemetryVisualization {
     if (!ld) return;
 
     time = Math.max(0, Math.min(time, ld.duration));
-    const pos = this.timeToPosition(ld.fullGroundTruth, time);
+    const pos = timeToPosition(ld.fullGroundTruth, time);
     this.setPositionFromTime(pos, time);
   }
 
@@ -1077,6 +1013,12 @@ export class TelemetryVisualization {
     this.leafletLayers.linear = L.polyline(ld[prefix + 'Linear'], { color: '#f97316', weight: 2, opacity: 0.8, dashArray: '5, 5' });
     this.leafletLayers.spline = L.polyline(ld[prefix + 'Spline'], { color: '#2563eb', weight: 3, opacity: 0.9 });
 
+    // EKF algorithms
+    const ekfRawData = ld[prefix + 'EkfRaw'] || [];
+    const ekfSmoothData = ld[prefix + 'EkfSmooth'] || [];
+    this.leafletLayers.ekfRaw = L.polyline(ekfRawData, { color: '#ec4899', weight: 2, opacity: 0.8, dashArray: '3, 3' });
+    this.leafletLayers.ekfSmooth = L.polyline(ekfSmoothData, { color: '#8b5cf6', weight: 3, opacity: 0.9 });
+
     // Speed Labels
     this.leafletLayers.speedLabels = L.layerGroup();
     if (ld.speedExtrema) {
@@ -1119,32 +1061,22 @@ export class TelemetryVisualization {
     // Trajectory click
     this.leafletLayers.groundTruth.on('click', (e) => this.onTrajectoryClick(e));
     this.leafletLayers.spline.on('click', (e) => this.onTrajectoryClick(e));
+    this.leafletLayers.ekfRaw.on('click', (e) => this.onTrajectoryClick(e));
+    this.leafletLayers.ekfSmooth.on('click', (e) => this.onTrajectoryClick(e));
   }
 
-  createSpeedGradientTrack(data) {
+  createSpeedGradientTrack(data, opacity = 0.9) {
     if (!data || data.length < 2) return L.layerGroup();
 
     const speeds = data.map(p => p.speed || 0);
     const minSpeed = Math.min(...speeds);
     const maxSpeed = Math.max(...speeds);
-    const speedRange = maxSpeed - minSpeed || 1;
 
-    const speedToColor = (speed) => {
-      const normalized = (speed - minSpeed) / speedRange;
-      let r, g, b;
-      if (normalized < 0.5) {
-        const t = normalized * 2;
-        r = 255;
-        g = Math.round(255 * t);
-        b = 0;
-      } else {
-        const t = (normalized - 0.5) * 2;
-        r = Math.round(255 * (1 - t));
-        g = Math.round(255 - 55 * t);
-        b = 0;
-      }
-      return `rgb(${r},${g},${b})`;
-    };
+    // Use chroma.js for perceptually uniform color interpolation
+    const colorScale = chroma
+      .scale(['#ff0000', '#ffff00', '#00c800'])
+      .mode('lab')
+      .domain([minSpeed, maxSpeed]);
 
     const layerGroup = L.layerGroup();
 
@@ -1152,10 +1084,10 @@ export class TelemetryVisualization {
       const p1 = data[i];
       const p2 = data[i + 1];
       const avgSpeed = ((p1.speed || 0) + (p2.speed || 0)) / 2;
-      const color = speedToColor(avgSpeed);
+      const color = colorScale(avgSpeed).hex();
 
       const segment = L.polyline([[p1.lat, p1.lon], [p2.lat, p2.lon]], {
-        color, weight: 6, opacity: 0.9, lineCap: 'round', lineJoin: 'round'
+        color, weight: 6, opacity, lineCap: 'round', lineJoin: 'round'
       });
       layerGroup.addLayer(segment);
     }
@@ -1227,9 +1159,22 @@ export class TelemetryVisualization {
     const container = document.getElementById('delta-chart-container');
     const deltaDisplay = document.getElementById('delta-display');
 
+    // Remove existing comparison track layer
+    if (this.comparisonTrackLayer && this.map.hasLayer(this.comparisonTrackLayer)) {
+      this.map.removeLayer(this.comparisonTrackLayer);
+      this.comparisonTrackLayer = null;
+    }
+
     if (this.state.comparisonLap) {
       container.style.display = 'block';
       this.createDeltaChart();
+
+      // Create comparison track layer (semi-transparent speed gradient)
+      const compData = this.getComparisonData();
+      if (compData && compData.fullGroundTruth) {
+        this.comparisonTrackLayer = this.createSpeedGradientTrack(compData.fullGroundTruth, 0.4);
+        this.comparisonTrackLayer.addTo(this.map);
+      }
     } else {
       container.style.display = 'none';
       deltaDisplay.textContent = '--';
@@ -1251,8 +1196,8 @@ export class TelemetryVisualization {
     const positions = [];
 
     for (let pos = 0; pos <= 1; pos += 0.01) {
-      const mainTelem = this.interpolateAtPosition(ld.fullGroundTruth, pos);
-      const compTelem = this.interpolateAtPosition(compData.fullGroundTruth, pos);
+      const mainTelem = interpolateAtPosition(ld.fullGroundTruth, pos);
+      const compTelem = interpolateAtPosition(compData.fullGroundTruth, pos);
 
       if (mainTelem && compTelem) {
         deltas.push(compTelem.lapTime - mainTelem.lapTime);
@@ -1336,21 +1281,65 @@ export class TelemetryVisualization {
     const ld = this.getLapData();
     if (!ld) return;
 
-    const metrics = this.state.currentMode === 'clean' ? ld.cleanMetrics : ld.noisyMetrics;
-    const entries = Object.entries(metrics);
-    if (entries.length === 0) return;
+    const cleanMetrics = ld.cleanMetrics || {};
+    const noisyMetrics = ld.noisyMetrics || {};
+    const outliers = ld.outliers;
 
-    const sorted = entries.sort((a, b) => a[1].rmse - b[1].rmse);
-    const bestKey = sorted[0][0];
+    // Algorithm display names
+    const algorithmLabels = {
+      linear: 'Linear',
+      spline: 'Spline (Catmull-Rom)',
+      ekfRaw: 'EKF Raw',
+      ekfSmooth: 'EKF + Spline',
+    };
 
-    const html = '<table class="metrics-table"><tr><th>Algorithm</th><th>RMSE</th><th>MAE</th></tr>' +
-      entries.map(([key, m]) =>
-        `<tr class="${key === bestKey ? 'best' : ''}">
-          <td>${key.charAt(0).toUpperCase() + key.slice(1)}</td>
-          <td>${m.rmse.toFixed(2)}m</td>
-          <td>${m.mae.toFixed(2)}m</td>
-        </tr>`
-      ).join('') + '</table>';
+    // Find best algorithms
+    const cleanEntries = Object.entries(cleanMetrics);
+    const noisyEntries = Object.entries(noisyMetrics);
+    const cleanBest = cleanEntries.length > 0
+      ? cleanEntries.sort((a, b) => a[1].rmse - b[1].rmse)[0][0]
+      : null;
+    const noisyBest = noisyEntries.length > 0
+      ? noisyEntries.sort((a, b) => a[1].rmse - b[1].rmse)[0][0]
+      : null;
+
+    let html = '';
+
+    // Outlier statistics
+    if (outliers) {
+      const cleanPct = ((outliers.clean / outliers.total) * 100).toFixed(1);
+      const noisyPct = ((outliers.noisy / outliers.total) * 100).toFixed(1);
+      html += `
+        <div class="outlier-stats">
+          <strong>Outlier Detection:</strong>
+          Clean: ${outliers.clean}/${outliers.total} (${cleanPct}%) |
+          Noisy: ${outliers.noisy}/${outliers.total} (${noisyPct}%)
+        </div>
+      `;
+    }
+
+    // Helper to build metrics table
+    const buildTable = (entries, bestKey) => {
+      if (entries.length === 0) return '<p style="color:#718096;font-size:11px;">No metrics available</p>';
+      return '<table class="metrics-table"><tr><th>Algorithm</th><th>RMSE</th><th>MAE</th><th>Max</th></tr>' +
+        entries.map(([key, m]) => {
+          const label = algorithmLabels[key] || key.charAt(0).toUpperCase() + key.slice(1);
+          return `<tr class="${key === bestKey ? 'best' : ''}">
+            <td>${label}</td>
+            <td>${m.rmse.toFixed(3)}m</td>
+            <td>${m.mae.toFixed(3)}m</td>
+            <td>${m.maxError.toFixed(3)}m</td>
+          </tr>`;
+        }).join('') + '</table>';
+    };
+
+    // Clean GPS Results
+    html += '<h4 class="metrics-header">Clean GPS Results</h4>';
+    html += buildTable(cleanEntries, cleanBest);
+
+    // Noisy GPS Results
+    html += '<h4 class="metrics-header">Noisy GPS Results (1-3m noise)</h4>';
+    html += buildTable(noisyEntries, noisyBest);
 
     document.getElementById('metrics-container').innerHTML = html;
   }

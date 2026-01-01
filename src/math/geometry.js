@@ -1,9 +1,11 @@
 /**
  * Coordinate transforms and geometric utilities.
+ * Uses geodesy library for distance calculations.
  * @module math/geometry
  */
 
 import CONFIG from '../config.js';
+import LatLon from 'geodesy/latlon-spherical.js';
 
 /**
  * Generates a random number from a Gaussian distribution using Box-Muller transform.
@@ -61,6 +63,7 @@ export function normalizeAngle(angle) {
 
 /**
  * Calculates the great-circle distance between two GPS points using Haversine formula.
+ * Uses geodesy library for accurate distance calculation.
  * @param {number} lat1 - First point latitude
  * @param {number} lon1 - First point longitude
  * @param {number} lat2 - Second point latitude
@@ -68,11 +71,7 @@ export function normalizeAngle(angle) {
  * @returns {number} Distance in meters
  */
 export function haversineDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // Earth radius in meters
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const p1 = new LatLon(lat1, lon1);
+  const p2 = new LatLon(lat2, lon2);
+  return p1.distanceTo(p2);
 }
