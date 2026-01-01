@@ -1,0 +1,12 @@
+{
+  "name": "gps-track-smoothing-poc",
+  "version": "1.0.0",
+  "description": "GPS track smoothing using Kalman filter - Proof of Concept",
+  "main": "simulation.js",
+  "scripts": {
+    "start": "node simulation.js"
+  },
+  "dependencies": {
+    "csv-parser": "^3.0.0"
+  }
+}
