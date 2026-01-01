@@ -10,44 +10,101 @@ GPS track smoothing proof-of-concept that demonstrates trajectory reconstruction
 - INS/GPS Sensor Fusion with 7-state Extended Kalman Filter (IMU + GPS)
 
 Input: RaceChrono CSV exports with 25Hz GPS + accelerometer + gyroscope data.
-Output: HTML map visualization with multiple trajectory layers.
 
-## Commands
+## Usage
 
+### Browser App (Recommended)
 ```bash
-npm install      # Install dependencies (csv-parser)
-npm start        # Run simulation (or: node simulation.js)
+# Start local server
+python3 -m http.server 8080
+
+# Open http://localhost:8080
+```
+
+Features:
+- Drag & drop CSV upload or click to browse
+- "Load Example Data" button with embedded sample
+- All processing runs in browser (no server needed for computation)
+
+### Node.js CLI
+```bash
+npm install      # Install dependencies
+npm start        # Process CSV and generate map.html
 ```
 
 Output is `map.html` - open in browser to visualize trajectories.
 
 ## Architecture
 
-Single file implementation (`simulation.js`) with these sections:
+Modular ES6 structure in `src/`:
 
-1. **CONFIG** - All tunable parameters (sampling rates, filter noise, EKF parameters)
-2. **Matrix operations** - Pure JS implementations (no external math libraries)
-3. **Utilities** - Coordinate transforms (GPS↔local ENU), angle normalization
-4. **RaceChrono CSV parser** - Handles 12-line header, extracts GPS + IMU columns
-5. **GPS simulation** - Downsampling 25Hz→1Hz, optional noise injection
-6. **Catmull-Rom spline** - Smooth interpolation between 1Hz GPS points
-7. **GPS-only Kalman** - 1D Kalman with constant velocity model + RTS smoother
-8. **Sensor Fusion EKF** - 7-state: [px, py, vx, vy, ψ, b_ax, b_ay]
-9. **Speed extrema detection** - Min/max speed markers with delta filtering
-10. **HTML generation** - Leaflet.js map with layer controls
+```
+src/
+├── browser/           # Browser-specific code
+│   ├── app.js         # Main browser app, file upload
+│   ├── process.js     # Processing pipeline for browser
+│   └── visualization.js # Map/chart rendering
+├── data/
+│   └── sample-data.js # Embedded example CSV (~6.8MB)
+├── io/
+│   ├── csv-parser.js  # CSV parsing (browser + Node.js)
+│   └── html-generator.js # Static HTML generation (Node.js)
+├── gps/
+│   ├── simulation.js  # Downsampling, noise injection
+│   └── outlier-detection.js # Physics-based filtering
+├── filters/
+│   ├── ekf-ins-gps.js # 7-state EKF sensor fusion
+│   └── kalman-1d.js   # 1D Kalman + RTS smoother
+├── interpolation/
+│   ├── linear.js      # Linear interpolation
+│   └── spline.js      # Catmull-Rom spline
+├── analysis/
+│   ├── distance.js    # Distance, lap position, lap time
+│   ├── metrics.js     # RMSE, MAE, max error
+│   └── speed-extrema.js # Min/max speed detection
+├── math/
+│   ├── matrix.js      # Matrix operations (pure JS)
+│   └── geometry.js    # Coordinate transforms, haversine
+├── config.js          # All tunable parameters
+├── runner.js          # Algorithm orchestration
+└── index.js           # Node.js CLI entry point
+```
+
+Entry points:
+- `index.html` - Browser app
+- `src/index.js` - Node.js CLI
 
 ## Key Data Flow
 
 ```
 RaceChrono CSV (25Hz)
-    → downsample GPS to 1Hz
-    → apply filters (spline/kalman/EKF)
-    → generate HTML map
+    → parseCSVString() or readRaceChronoCSV()
+    → enhanceTelemetryPoints() (distance, lapPosition)
+    → downsampleGPS() (25Hz → 1Hz)
+    → filterGPSOutliers() (physics-based)
+    → addGPSNoise() (for comparison)
+    → runAllAlgorithms()
+        ├── Linear interpolation
+        ├── Spline interpolation
+        ├── EKF sensor fusion
+        └── EKF + Spline smoothing
+    → calculateMetrics() (RMSE, MAE)
+    → Visualization (Leaflet + Chart.js)
 ```
 
-## Configuration Notes
+## Configuration
+
+Key settings in `src/config.js`:
 
 - `CONFIG.noise.enabled`: Toggle GPS noise simulation
+- `CONFIG.noise.minMeters/maxMeters`: Noise range (3-8m default)
 - `CONFIG.ekf.sigma_accel/sigma_gyro`: IMU noise parameters
 - `CONFIG.input.skipLines`: RaceChrono CSV header rows (default 12)
-- CSV columns: lat=11, lon=12, speed=14, lateral_acc=17, longitudinal_acc=19, yaw_rate=28
+- `CONFIG.outlierDetection`: Physics-based outlier filtering thresholds
+
+## CSV Format
+
+RaceChrono exports with these column indices:
+- 0: timestamp, 2: lap_number, 5: accuracy, 7: bearing
+- 11: latitude, 12: longitude, 14: speed (m/s)
+- 17: lateral_acc (G), 19: longitudinal_acc (G), 28: yaw_rate (deg/s)

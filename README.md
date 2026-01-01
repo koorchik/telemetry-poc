@@ -70,27 +70,30 @@ See [RESULTS.md](RESULTS.md) for detailed benchmark results.
 
 ## Usage
 
-### Prerequisites
+### Browser App (Recommended)
+
+No installation needed. Just start a local server and open in browser:
+
+```bash
+python3 -m http.server 8080
+# Open http://localhost:8080
+```
+
+**Features:**
+- Drag & drop your RaceChrono CSV file or click to browse
+- "Load Example Data" button with embedded sample track
+- All processing runs in browser (EKF, Kalman, Spline, etc.)
+- Interactive visualization with replay, charts, lap comparison
+
+### Node.js CLI
+
+For batch processing or generating static HTML:
 
 ```bash
 npm install
+npm start              # Process default CSV, generate map.html
+node src/index.js 3    # Process specific lap
 ```
-
-### Run Simulation
-
-```bash
-# All laps
-node simulation.js
-
-# Specific lap (1-5)
-node simulation.js 3
-```
-
-This will:
-1. Load RaceChrono data
-2. Run all algorithms with clean and noisy GPS
-3. Display metrics comparison
-4. Generate `map.html` with interactive visualization
 
 ### Run Benchmark
 
@@ -102,29 +105,44 @@ Generates `RESULTS.md` with metrics for all laps and noise levels.
 
 ### View Results
 
-Open `map.html` in a browser to see:
-- Ground truth trajectory (green)
-- GPS points (red markers)
+The visualization shows:
+- Ground truth trajectory (speed-colored gradient)
+- GPS points (red markers at 1Hz)
 - Algorithm outputs (toggle in control panel)
-- Switch between Clean/Noisy GPS modes
-- Metrics comparison table
+- Clean/Noisy GPS mode comparison
+- Replay animation with telemetry charts
+- Lap-to-lap delta comparison
+- Accuracy metrics table (RMSE, MAE)
 
 ## File Structure
 
 ```
 telemetry-poc/
-├── simulation.js     # Main simulation script
-├── benchmark.js      # Benchmark runner
-├── map.html          # Generated visualization
-├── RESULTS.md        # Benchmark results
-├── README.md         # This file
-├── package.json
-└── race-chrono-session-v3.csv  # Input data
+├── index.html              # Browser app entry point
+├── src/
+│   ├── browser/            # Browser-specific code
+│   │   ├── app.js          # File upload, main app
+│   │   ├── process.js      # Processing pipeline
+│   │   └── visualization.js # Map/chart rendering
+│   ├── data/
+│   │   └── sample-data.js  # Embedded example CSV
+│   ├── io/                 # Input/output
+│   ├── gps/                # GPS processing
+│   ├── filters/            # EKF, Kalman filters
+│   ├── interpolation/      # Linear, Spline
+│   ├── analysis/           # Metrics, speed extrema
+│   ├── math/               # Matrix ops, geometry
+│   ├── config.js           # Configuration
+│   └── index.js            # Node.js CLI entry
+├── map.html                # Generated visualization (CLI)
+├── benchmark.js            # Benchmark runner
+├── RESULTS.md              # Benchmark results
+└── race-chrono-session-v3.csv  # Sample data
 ```
 
 ## Configuration
 
-Edit `CONFIG` in `simulation.js`:
+Edit `src/config.js`:
 
 ```javascript
 const CONFIG = {

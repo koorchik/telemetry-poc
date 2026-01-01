@@ -3,5 +3,5 @@
  * @module io
  */
 
-export { readRaceChronoCSV } from './csv-parser.js';
+export { readRaceChronoCSV, parseCSVString } from './csv-parser.js';
 export { generateHTML } from './html-generator.js';
