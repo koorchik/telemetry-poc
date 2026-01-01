@@ -14,9 +14,7 @@ Input: RaceChrono CSV exports with 25Hz GPS + accelerometer + gyroscope data.
 ## Usage
 
 ```bash
-# Start local server
 python3 -m http.server 8080
-
 # Open http://localhost:8080
 ```
 
@@ -87,10 +85,11 @@ RaceChrono CSV (25Hz)
 Key settings in `src/config.js`:
 
 - `CONFIG.noise.enabled`: Toggle GPS noise simulation
-- `CONFIG.noise.minMeters/maxMeters`: Noise range (3-8m default)
+- `CONFIG.noise.minMeters/maxMeters`: Noise range (1-3m default)
 - `CONFIG.ekf.sigma_accel/sigma_gyro`: IMU noise parameters
 - `CONFIG.input.skipLines`: RaceChrono CSV header rows (default 12)
 - `CONFIG.outlierDetection`: Physics-based outlier filtering thresholds
+- `CONFIG.speedExtrema.minDeltaKmh`: Min speed change for labels (2 km/h for karting)
 
 ## CSV Format
 
