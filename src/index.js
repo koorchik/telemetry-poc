@@ -17,6 +17,7 @@ import { downsampleGPS, addGPSNoise, filterGPSOutliers } from './gps/index.js';
 import { applyLinearInterpolation } from './interpolation/linear.js';
 import { applySplineInterpolation } from './interpolation/spline.js';
 import { calculateAccuracyMetrics } from './analysis/metrics.js';
+import { enhanceTelemetryPoints, createChartData } from './analysis/distance.js';
 import { runAllAlgorithms, printMetricsTable } from './runner.js';
 
 /**
@@ -27,12 +28,18 @@ import { runAllAlgorithms, printMetricsTable } from './runner.js';
  */
 function processLap(fullDataRaw, lapNumber) {
   // Filter data for this lap
-  const lapData = fullDataRaw.filter(p => p.lap === lapNumber);
-  if (lapData.length === 0) return null;
+  const lapDataRaw = fullDataRaw.filter(p => p.lap === lapNumber);
+  if (lapDataRaw.length === 0) return null;
 
   // Normalize timestamps
-  const t0 = lapData[0].timestamp;
-  lapData.forEach(p => p.timestamp -= t0);
+  const t0 = lapDataRaw[0].timestamp;
+  lapDataRaw.forEach(p => p.timestamp -= t0);
+
+  // Enhance telemetry with distance, position, and lap time
+  const { points: lapData, totalDistance, duration } = enhanceTelemetryPoints(lapDataRaw);
+
+  // Create chart data (downsampled to 2Hz for performance)
+  const chartData = createChartData(lapData, 2);
 
   // Downsample GPS
   const gpsDownsampled = downsampleGPS(lapData);
@@ -55,6 +62,8 @@ function processLap(fullDataRaw, lapNumber) {
   return {
     lap: lapNumber,
     groundTruth: lapData,
+    totalDistance,
+    chartData,
     cleanGPS,
     noisyGPS,
     cleanLinear,
@@ -69,7 +78,7 @@ function processLap(fullDataRaw, lapNumber) {
       linear: calculateAccuracyMetrics(lapData, noisyLinear),
       spline: calculateAccuracyMetrics(lapData, noisySpline),
     },
-    duration: lapData[lapData.length - 1].timestamp,
+    duration,
   };
 }
 
@@ -104,10 +113,12 @@ async function main() {
   console.log(`3. DETAILED ANALYSIS - Lap ${selectedLap}`);
   console.log('-------------------------------------------------------------------');
 
-  // Get full data for selected lap
-  const fullData = fullDataRaw.filter(p => p.lap === selectedLap);
-  const t0 = fullData[0].timestamp;
-  fullData.forEach(p => p.timestamp -= t0);
+  // Get full data for selected lap with enhanced telemetry
+  const fullDataRaw2 = fullDataRaw.filter(p => p.lap === selectedLap);
+  const t0 = fullDataRaw2[0].timestamp;
+  fullDataRaw2.forEach(p => p.timestamp -= t0);
+
+  const { points: fullData, totalDistance: selectedTotalDistance } = enhanceTelemetryPoints(fullDataRaw2);
 
   const gpsDownsampled = downsampleGPS(fullData);
   const cleanOutliers = filterGPSOutliers(gpsDownsampled);
@@ -116,7 +127,8 @@ async function main() {
   const noisyOutliers = filterGPSOutliers(noisyGPSRaw);
   const noisyGPS = noisyOutliers.filtered;
 
-  console.log(`   Duration: ${(fullData[fullData.length - 1].timestamp / 60).toFixed(1)} min`);
+  console.log(`   Duration: ${(fullData[fullData.length - 1].lapTime / 60).toFixed(1)} min`);
+  console.log(`   Distance: ${(selectedTotalDistance / 1000).toFixed(2)} km`);
   console.log(`   GPS points: ${gpsDownsampled.length}`);
   console.log(`   Outliers detected (clean): ${cleanOutliers.outliers.length} (${(cleanOutliers.outliers.length / gpsDownsampled.length * 100).toFixed(1)}%)`);
   console.log(`   Outliers detected (noisy): ${noisyOutliers.outliers.length} (${(noisyOutliers.outliers.length / gpsDownsampled.length * 100).toFixed(1)}%)`);
