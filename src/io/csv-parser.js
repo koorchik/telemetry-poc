@@ -62,21 +62,3 @@ export function parseCSVString(csvText, skipLines = 12) {
       yaw_rate: cols[28] || 0,         // deg/s - z_rate_of_rotation (yaw)
     }));
 }
-
-/**
- * Parses a RaceChrono CSV file (Node.js only).
- * Skips the first 12 lines of metadata.
- * @param {string} filename - Path to the CSV file
- * @returns {Promise<TelemetryPoint[]>} Parsed telemetry data
- */
-export async function readRaceChronoCSV(filename) {
-  // Dynamic import for Node.js - keeps module browser-compatible
-  const fs = await import('fs');
-  const CONFIG = (await import('../config.js')).default;
-
-  const content = fs.readFileSync(filename, 'utf-8');
-  const results = parseCSVString(content, CONFIG.input.skipLines);
-
-  console.log(`   Loaded ${results.length} points from ${filename}`);
-  return results;
-}

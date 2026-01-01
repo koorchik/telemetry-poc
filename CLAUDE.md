@@ -13,7 +13,6 @@ Input: RaceChrono CSV exports with 25Hz GPS + accelerometer + gyroscope data.
 
 ## Usage
 
-### Browser App (Recommended)
 ```bash
 # Start local server
 python3 -m http.server 8080
@@ -25,30 +24,23 @@ Features:
 - Drag & drop CSV upload or click to browse
 - "Load Example Data" button with embedded sample
 - All processing runs in browser (no server needed for computation)
-
-### Node.js CLI
-```bash
-npm install      # Install dependencies
-npm start        # Process CSV and generate map.html
-```
-
-Output is `map.html` - open in browser to visualize trajectories.
+- Full metrics report (RMSE, MAE, Max Error) for all algorithms
+- Outlier detection statistics
 
 ## Architecture
 
-Modular ES6 structure in `src/`:
+Browser-only ES6 modular structure in `src/`:
 
 ```
 src/
 ├── browser/           # Browser-specific code
 │   ├── app.js         # Main browser app, file upload
-│   ├── process.js     # Processing pipeline for browser
-│   └── visualization.js # Map/chart rendering
+│   ├── process.js     # Processing pipeline
+│   └── visualization.js # Map/chart/metrics rendering
 ├── data/
 │   └── sample-data.js # Embedded example CSV (~6.8MB)
 ├── io/
-│   ├── csv-parser.js  # CSV parsing (browser + Node.js)
-│   └── html-generator.js # Static HTML generation (Node.js)
+│   └── csv-parser.js  # CSV parsing (browser-only)
 ├── gps/
 │   ├── simulation.js  # Downsampling, noise injection
 │   └── outlier-detection.js # Physics-based filtering
@@ -64,21 +56,19 @@ src/
 │   └── speed-extrema.js # Min/max speed detection
 ├── math/
 │   ├── matrix.js      # Matrix operations (pure JS)
-│   └── geometry.js    # Coordinate transforms, haversine
+│   ├── geometry.js    # Coordinate transforms, haversine
+│   └── interpolation.js # Shared interpolation utilities
 ├── config.js          # All tunable parameters
-├── runner.js          # Algorithm orchestration
-└── index.js           # Node.js CLI entry point
+└── runner.js          # Algorithm orchestration
 ```
 
-Entry points:
-- `index.html` - Browser app
-- `src/index.js` - Node.js CLI
+Entry point: `index.html`
 
 ## Key Data Flow
 
 ```
 RaceChrono CSV (25Hz)
-    → parseCSVString() or readRaceChronoCSV()
+    → parseCSVString()
     → enhanceTelemetryPoints() (distance, lapPosition)
     → downsampleGPS() (25Hz → 1Hz)
     → filterGPSOutliers() (physics-based)
@@ -88,7 +78,7 @@ RaceChrono CSV (25Hz)
         ├── Spline interpolation
         ├── EKF sensor fusion
         └── EKF + Spline smoothing
-    → calculateMetrics() (RMSE, MAE)
+    → calculateMetrics() (RMSE, MAE, Max Error)
     → Visualization (Leaflet + Chart.js)
 ```
 

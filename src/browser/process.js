@@ -6,9 +6,6 @@
 
 import { parseCSVString } from '../io/csv-parser.js';
 import { downsampleGPS, addGPSNoise, filterGPSOutliers } from '../gps/index.js';
-import { applyLinearInterpolation } from '../interpolation/linear.js';
-import { applySplineInterpolation } from '../interpolation/spline.js';
-import { calculateAccuracyMetrics } from '../analysis/metrics.js';
 import { enhanceTelemetryPoints, createChartData } from '../analysis/distance.js';
 import { runAllAlgorithms } from '../runner.js';
 
@@ -53,11 +50,9 @@ function processLap(fullDataRaw, lapNumber) {
   const noisyOutlierResult = filterGPSOutliers(noisyGPSRaw);
   const noisyGPS = noisyOutlierResult.filtered;
 
-  // Run algorithms (Linear and Spline for speed)
-  const cleanLinear = applyLinearInterpolation(lapData, cleanGPS);
-  const cleanSpline = applySplineInterpolation(lapData, cleanGPS);
-  const noisyLinear = applyLinearInterpolation(lapData, noisyGPS);
-  const noisySpline = applySplineInterpolation(lapData, noisyGPS);
+  // Run all algorithms including EKF
+  const cleanResults = runAllAlgorithms(lapData, cleanGPS);
+  const noisyResults = runAllAlgorithms(lapData, noisyGPS);
 
   return {
     lap: lapNumber,
@@ -66,17 +61,20 @@ function processLap(fullDataRaw, lapNumber) {
     chartData,
     cleanGPS,
     noisyGPS,
-    cleanLinear,
-    cleanSpline,
-    noisyLinear,
-    noisySpline,
-    cleanMetrics: {
-      linear: calculateAccuracyMetrics(lapData, cleanLinear),
-      spline: calculateAccuracyMetrics(lapData, cleanSpline),
-    },
-    noisyMetrics: {
-      linear: calculateAccuracyMetrics(lapData, noisyLinear),
-      spline: calculateAccuracyMetrics(lapData, noisySpline),
+    cleanLinear: cleanResults.linear,
+    cleanSpline: cleanResults.spline,
+    cleanEkfRaw: cleanResults.ekfRaw,
+    cleanEkfSmooth: cleanResults.ekfSmooth,
+    noisyLinear: noisyResults.linear,
+    noisySpline: noisyResults.spline,
+    noisyEkfRaw: noisyResults.ekfRaw,
+    noisyEkfSmooth: noisyResults.ekfSmooth,
+    cleanMetrics: cleanResults.metrics,
+    noisyMetrics: noisyResults.metrics,
+    outliers: {
+      clean: cleanOutlierResult.outliers.length,
+      noisy: noisyOutlierResult.outliers.length,
+      total: gpsDownsampled.length,
     },
     duration,
   };
