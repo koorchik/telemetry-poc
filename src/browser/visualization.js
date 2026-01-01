@@ -6,6 +6,7 @@
 
 import chroma from 'chroma-js';
 import { findSpeedExtrema } from '../analysis/speed-extrema.js';
+import CONFIG from '../config.js';
 import {
   interpolateAtPosition,
   interpolateAtTime,
@@ -531,7 +532,12 @@ export class TelemetryVisualization {
       const ld = allLapsData[lap];
       if (!ld) continue;
 
-      const lapSpeedExtrema = findSpeedExtrema(ld.groundTruth);
+      const lapSpeedExtrema = findSpeedExtrema(
+        ld.groundTruth,
+        CONFIG.speedExtrema.windowSize,
+        CONFIG.speedExtrema.minSpeedThreshold,
+        CONFIG.speedExtrema.minDeltaKmh
+      );
 
       lapsMapData[lap] = {
         groundTruth: toCoords(downsample(ld.groundTruth)),

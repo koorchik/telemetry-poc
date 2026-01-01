@@ -58,6 +58,13 @@ const CONFIG = {
     triangleRatio: 2.5,       // ratio threshold for path deviation
   },
 
+  // Speed extrema detection (min/max speed labels on map)
+  speedExtrema: {
+    windowSize: 25,        // Smoothing window (25 = 1 sec at 25Hz)
+    minSpeedThreshold: 5,  // Ignore speeds below this (m/s)
+    minDeltaKmh: 2,        // Min speed change between extrema (km/h) - low for karting
+  },
+
   // Constants
   G: 9.81,
   METERS_PER_DEG_LAT: 111320,
