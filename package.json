@@ -5,9 +5,13 @@
   "description": "GPS track smoothing using Kalman filter - Proof of Concept",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "deploy": "gh-pages -d . -e . --src '{index.html,src/**}'"
   },
   "dependencies": {
     "csv-parser": "^3.0.0"
+  },
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
   }
 }

@@ -2,6 +2,8 @@
 
 A Proof of Concept for GPS trajectory smoothing and sensor fusion, comparing multiple interpolation algorithms.
 
+**[Live Demo](https://koorchik.github.io/telemetry-poc/)** - Try it in your browser with sample data or upload your own RaceChrono CSV.
+
 ## Overview
 
 This project demonstrates how to improve GPS track accuracy by:
