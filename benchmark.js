@@ -5,103 +5,22 @@
  *
  * Usage:
  *   node benchmark.js
+ *
+ * @module benchmark
  */
 
-const fs = require('fs');
+import fs from 'fs';
+import CONFIG from './src/config.js';
+import { gaussianRandom, haversineDistance } from './src/math/geometry.js';
+import { calculateAccuracyMetrics } from './src/analysis/metrics.js';
+import { applyLinearInterpolation } from './src/interpolation/linear.js';
+import { applySplineInterpolation } from './src/interpolation/spline.js';
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-const CONFIG = {
-  input: {
-    file: 'race-chrono-session-v3.csv',
-    skipLines: 12,
-  },
-  sampling: {
-    imuHz: 25,
-    gpsHz: 1,
-  },
-  kalman: {
-    R: 0.01,
-    Q: 1.0,
-    initialP: 100,
-  },
-  ekf: {
-    sigma_accel: 0.5,
-    sigma_gyro: 0.02,
-    sigma_bias: 0.001,
-    gps_pos_noise: 5.0,
-    min_speed_for_heading: 2.0,
-  },
-  G: 9.81,
-  METERS_PER_DEG_LAT: 111320,
-};
-
-// ============================================================================
-// UTILITY FUNCTIONS (copied from simulation.js)
-// ============================================================================
-
-function gaussianRandom(mean = 0, stddev = 1) {
-  const u1 = Math.random();
-  const u2 = Math.random();
-  const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-  return z0 * stddev + mean;
-}
-
-function haversineDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function calculateAccuracyMetrics(groundTruth, estimated) {
-  if (estimated.length === 0) {
-    return { rmse: Infinity, mae: Infinity, maxError: Infinity, count: 0 };
-  }
-
-  const estMap = new Map();
-  for (const p of estimated) {
-    estMap.set(p.timestamp.toFixed(3), p);
-  }
-
-  let sumSquaredError = 0;
-  let sumAbsError = 0;
-  let maxError = 0;
-  let count = 0;
-
-  for (const gt of groundTruth) {
-    const key = gt.timestamp.toFixed(3);
-    const est = estMap.get(key);
-    if (!est) continue;
-
-    const error = haversineDistance(gt.lat, gt.lon, est.lat, est.lon);
-    sumSquaredError += error * error;
-    sumAbsError += error;
-    maxError = Math.max(maxError, error);
-    count++;
-  }
-
-  if (count === 0) {
-    return { rmse: Infinity, mae: Infinity, maxError: Infinity, count: 0 };
-  }
-
-  return {
-    rmse: Math.sqrt(sumSquaredError / count),
-    mae: sumAbsError / count,
-    maxError: maxError,
-    count: count
-  };
-}
-
-// ============================================================================
-// DATA READING
-// ============================================================================
-
+/**
+ * Reads RaceChrono CSV file (simplified version without IMU data).
+ * @param {string} filename - Path to CSV file
+ * @returns {Array} Parsed telemetry data
+ */
 function readRaceChronoCSV(filename) {
   const content = fs.readFileSync(filename, 'utf-8');
   const lines = content.split('\n');
@@ -130,6 +49,11 @@ function readRaceChronoCSV(filename) {
   return results;
 }
 
+/**
+ * Downsamples GPS to 1Hz.
+ * @param {Array} data - Input data
+ * @returns {Array} Downsampled data
+ */
 function downsampleGPS(data) {
   const ratio = CONFIG.sampling.imuHz / CONFIG.sampling.gpsHz;
   const result = [];
@@ -140,6 +64,13 @@ function downsampleGPS(data) {
   return result;
 }
 
+/**
+ * Adds Gaussian noise to GPS points.
+ * @param {Array} points - GPS points
+ * @param {number} minMeters - Minimum noise in meters
+ * @param {number} maxMeters - Maximum noise in meters
+ * @returns {Array} Noisy points
+ */
 function addGPSNoise(points, minMeters, maxMeters) {
   const avgNoise = (minMeters + maxMeters) / 2;
   return points.map(p => {
@@ -154,80 +85,74 @@ function addGPSNoise(points, minMeters, maxMeters) {
   });
 }
 
-// ============================================================================
-// INTERPOLATION ALGORITHMS
-// ============================================================================
+/**
+ * Generates markdown report.
+ * @param {Array} results - Benchmark results
+ * @param {Object} averages - Averaged metrics
+ * @param {number[]} laps - Lap numbers
+ * @param {Array} scenarios - Noise scenarios
+ * @returns {string} Markdown content
+ */
+function generateMarkdown(results, averages, laps, scenarios) {
+  const date = new Date().toISOString().split('T')[0];
 
-function catmullRom(p0, p1, p2, p3, t) {
-  const t2 = t * t;
-  const t3 = t2 * t;
-  return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2*p0 - 5*p1 + 4*p2 - p3) * t2 + (-p0 + 3*p1 - 3*p2 + p3) * t3);
-}
+  let md = `# GPS Track Smoothing - Benchmark Results
 
-function applyLinearInterpolation(fullData, noisyGPS) {
-  if (noisyGPS.length < 2) return noisyGPS;
-  const result = [];
-  const startIdx = noisyGPS[0].originalIndex || 0;
+Generated: ${date}
 
-  for (let i = startIdx; i < fullData.length; i++) {
-    const t = fullData[i].timestamp;
-    let gpsIdx = 0;
-    while (gpsIdx < noisyGPS.length - 1 && noisyGPS[gpsIdx + 1].timestamp <= t) {
-      gpsIdx++;
-    }
-    if (gpsIdx >= noisyGPS.length - 1) {
-      result.push({ timestamp: t, lat: noisyGPS[noisyGPS.length - 1].lat, lon: noisyGPS[noisyGPS.length - 1].lon });
-      continue;
-    }
-    const p1 = noisyGPS[gpsIdx];
-    const p2 = noisyGPS[gpsIdx + 1];
-    const u = (t - p1.timestamp) / (p2.timestamp - p1.timestamp);
-    result.push({
-      timestamp: t,
-      lat: p1.lat + u * (p2.lat - p1.lat),
-      lon: p1.lon + u * (p2.lon - p1.lon)
-    });
+## Configuration
+
+- **GPS Frequency:** 1 Hz (downsampled from 25 Hz)
+- **Ground Truth:** RaceChrono data at 25 Hz
+- **Algorithms:** Linear Interpolation, Catmull-Rom Spline
+- **Laps:** ${laps.join(', ')}
+
+## Summary (Average RMSE across all laps)
+
+| Noise Level | Linear RMSE (m) | Spline RMSE (m) | Best |
+|-------------|-----------------|-----------------|------|
+`;
+
+  for (const scenario of scenarios) {
+    const avg = averages[scenario.label];
+    const best = avg.linear.rmse < avg.spline.rmse ? 'Linear' : 'Spline';
+    md += `| ${scenario.label} | ${avg.linear.rmse.toFixed(3)} | ${avg.spline.rmse.toFixed(3)} | ${best} |\n`;
   }
-  return result;
-}
 
-function applySplineInterpolation(fullData, noisyGPS) {
-  if (noisyGPS.length < 2) return noisyGPS;
-  const result = [];
-  const startIdx = noisyGPS[0].originalIndex || 0;
+  md += `\n## Detailed Results by Lap\n`;
 
-  for (let i = startIdx; i < fullData.length; i++) {
-    const t = fullData[i].timestamp;
-    let gpsIdx = 0;
-    while (gpsIdx < noisyGPS.length - 1 && noisyGPS[gpsIdx + 1].timestamp <= t) {
-      gpsIdx++;
+  for (const lap of laps) {
+    md += `\n### Lap ${lap}\n\n`;
+    md += `| Noise Level | Linear RMSE | Linear MAE | Spline RMSE | Spline MAE |\n`;
+    md += `|-------------|-------------|------------|-------------|------------|\n`;
+
+    for (const r of results.filter(r => r.lap === lap)) {
+      md += `| ${r.scenario} | ${r.linear.rmse.toFixed(3)}m | ${r.linear.mae.toFixed(3)}m | ${r.spline.rmse.toFixed(3)}m | ${r.spline.mae.toFixed(3)}m |\n`;
     }
-    if (gpsIdx >= noisyGPS.length - 1) {
-      result.push({ timestamp: t, lat: noisyGPS[noisyGPS.length - 1].lat, lon: noisyGPS[noisyGPS.length - 1].lon });
-      continue;
-    }
-    const i0 = Math.max(0, gpsIdx - 1);
-    const i1 = gpsIdx;
-    const i2 = Math.min(noisyGPS.length - 1, gpsIdx + 1);
-    const i3 = Math.min(noisyGPS.length - 1, gpsIdx + 2);
-    const t0 = noisyGPS[i1].timestamp;
-    const t1 = noisyGPS[i2].timestamp;
-    const u = (t - t0) / (t1 - t0);
-    const lat = catmullRom(noisyGPS[i0].lat, noisyGPS[i1].lat, noisyGPS[i2].lat, noisyGPS[i3].lat, u);
-    const lon = catmullRom(noisyGPS[i0].lon, noisyGPS[i1].lon, noisyGPS[i2].lon, noisyGPS[i3].lon, u);
-    result.push({ timestamp: t, lat, lon });
   }
-  return result;
+
+  md += `\n## Conclusions
+
+1. **Clean GPS:** Spline interpolation provides the best accuracy (sub-meter RMSE)
+2. **Noisy GPS:** Linear interpolation performs slightly better as it doesn't amplify noise
+3. **Noise Impact:** RMSE roughly matches the noise level (3-8m noise → ~6-7m RMSE)
+
+## Notes
+
+- EKF (Extended Kalman Filter) was not included in this benchmark as it requires IMU data
+- Outlier detection was disabled for consistent comparison
+`;
+
+  return md;
 }
 
-// ============================================================================
-// BENCHMARK RUNNER
-// ============================================================================
-
+/**
+ * Main benchmark runner.
+ */
 async function runBenchmark() {
-  console.log('╔═══════════════════════════════════════════════════════════════════╗');
-  console.log('║              GPS Track Smoothing - Benchmark                      ║');
-  console.log('╚═══════════════════════════════════════════════════════════════════╝\n');
+  console.log('+===================================================================+');
+  console.log('|              GPS Track Smoothing - Benchmark                      |');
+  console.log('+===================================================================+\n');
 
   // Read data
   console.log('Reading data...');
@@ -305,69 +230,16 @@ async function runBenchmark() {
   console.log('\nResults saved to RESULTS.md');
 
   // Print summary
-  console.log('\n' + '═'.repeat(70));
+  console.log('\n' + '='.repeat(70));
   console.log('SUMMARY (Average RMSE across all laps)');
-  console.log('═'.repeat(70));
-  console.log('\nScenario              │ Linear (m) │ Spline (m)');
-  console.log('──────────────────────┼────────────┼────────────');
+  console.log('='.repeat(70));
+  console.log('\nScenario              | Linear (m) | Spline (m)');
+  console.log('----------------------|------------|------------');
   for (const scenario of noiseScenarios) {
     const avg = averages[scenario.label];
-    console.log(`${scenario.label.padEnd(22)}│ ${avg.linear.rmse.toFixed(3).padStart(10)} │ ${avg.spline.rmse.toFixed(3).padStart(10)}`);
+    console.log(`${scenario.label.padEnd(22)}| ${avg.linear.rmse.toFixed(3).padStart(10)} | ${avg.spline.rmse.toFixed(3).padStart(10)}`);
   }
   console.log('');
-}
-
-function generateMarkdown(results, averages, laps, scenarios) {
-  const date = new Date().toISOString().split('T')[0];
-
-  let md = `# GPS Track Smoothing - Benchmark Results
-
-Generated: ${date}
-
-## Configuration
-
-- **GPS Frequency:** 1 Hz (downsampled from 25 Hz)
-- **Ground Truth:** RaceChrono data at 25 Hz
-- **Algorithms:** Linear Interpolation, Catmull-Rom Spline
-- **Laps:** ${laps.join(', ')}
-
-## Summary (Average RMSE across all laps)
-
-| Noise Level | Linear RMSE (m) | Spline RMSE (m) | Best |
-|-------------|-----------------|-----------------|------|
-`;
-
-  for (const scenario of scenarios) {
-    const avg = averages[scenario.label];
-    const best = avg.linear.rmse < avg.spline.rmse ? 'Linear' : 'Spline';
-    md += `| ${scenario.label} | ${avg.linear.rmse.toFixed(3)} | ${avg.spline.rmse.toFixed(3)} | ${best} |\n`;
-  }
-
-  md += `\n## Detailed Results by Lap\n`;
-
-  for (const lap of laps) {
-    md += `\n### Lap ${lap}\n\n`;
-    md += `| Noise Level | Linear RMSE | Linear MAE | Spline RMSE | Spline MAE |\n`;
-    md += `|-------------|-------------|------------|-------------|------------|\n`;
-
-    for (const r of results.filter(r => r.lap === lap)) {
-      md += `| ${r.scenario} | ${r.linear.rmse.toFixed(3)}m | ${r.linear.mae.toFixed(3)}m | ${r.spline.rmse.toFixed(3)}m | ${r.spline.mae.toFixed(3)}m |\n`;
-    }
-  }
-
-  md += `\n## Conclusions
-
-1. **Clean GPS:** Spline interpolation provides the best accuracy (sub-meter RMSE)
-2. **Noisy GPS:** Linear interpolation performs slightly better as it doesn't amplify noise
-3. **Noise Impact:** RMSE roughly matches the noise level (3-8m noise → ~6-7m RMSE)
-
-## Notes
-
-- EKF (Extended Kalman Filter) was not included in this benchmark as it requires IMU data
-- Outlier detection was disabled for consistent comparison
-`;
-
-  return md;
 }
 
 // Run benchmark
