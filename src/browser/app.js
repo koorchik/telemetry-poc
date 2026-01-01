@@ -84,7 +84,7 @@ function showUpload() {
 // Progress UI
 // =====================================================
 function showProgress(message) {
-  progressEl.style.display = 'block';
+  progressEl.style.display = 'flex';
   progressText.textContent = message;
 }
 

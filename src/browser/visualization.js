@@ -502,6 +502,7 @@ export class TelemetryVisualization {
       lastFrameTime: null,
     };
     this.leafletLayers = {};
+    this.comparisonTrackLayer = null;
     this.carMarker = null;
     this.comparisonMarker = null;
     this.charts = {};
@@ -653,11 +654,24 @@ export class TelemetryVisualization {
 
   initMap() {
     this.map = L.map('map');
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+    // Base tile layers
+    const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap',
       maxZoom: 21,
       maxNativeZoom: 19
-    }).addTo(this.map);
+    });
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '© Esri',
+      maxZoom: 21,
+      maxNativeZoom: 18
+    });
+
+    // Add default layer and layer control
+    osmLayer.addTo(this.map);
+    L.control.layers({ 'Street': osmLayer, 'Satellite': satelliteLayer }, null, { position: 'bottomleft' }).addTo(this.map);
+
     this.map.fitBounds(this.data.bounds, { padding: [30, 30] });
 
     // Car markers
@@ -1051,7 +1065,7 @@ export class TelemetryVisualization {
     this.leafletLayers.ekfSmooth.on('click', (e) => this.onTrajectoryClick(e));
   }
 
-  createSpeedGradientTrack(data) {
+  createSpeedGradientTrack(data, opacity = 0.9) {
     if (!data || data.length < 2) return L.layerGroup();
 
     const speeds = data.map(p => p.speed || 0);
@@ -1073,7 +1087,7 @@ export class TelemetryVisualization {
       const color = colorScale(avgSpeed).hex();
 
       const segment = L.polyline([[p1.lat, p1.lon], [p2.lat, p2.lon]], {
-        color, weight: 6, opacity: 0.9, lineCap: 'round', lineJoin: 'round'
+        color, weight: 6, opacity, lineCap: 'round', lineJoin: 'round'
       });
       layerGroup.addLayer(segment);
     }
@@ -1145,9 +1159,22 @@ export class TelemetryVisualization {
     const container = document.getElementById('delta-chart-container');
     const deltaDisplay = document.getElementById('delta-display');
 
+    // Remove existing comparison track layer
+    if (this.comparisonTrackLayer && this.map.hasLayer(this.comparisonTrackLayer)) {
+      this.map.removeLayer(this.comparisonTrackLayer);
+      this.comparisonTrackLayer = null;
+    }
+
     if (this.state.comparisonLap) {
       container.style.display = 'block';
       this.createDeltaChart();
+
+      // Create comparison track layer (semi-transparent speed gradient)
+      const compData = this.getComparisonData();
+      if (compData && compData.fullGroundTruth) {
+        this.comparisonTrackLayer = this.createSpeedGradientTrack(compData.fullGroundTruth, 0.4);
+        this.comparisonTrackLayer.addTo(this.map);
+      }
     } else {
       container.style.display = 'none';
       deltaDisplay.textContent = '--';
@@ -1311,7 +1338,7 @@ export class TelemetryVisualization {
     html += buildTable(cleanEntries, cleanBest);
 
     // Noisy GPS Results
-    html += '<h4 class="metrics-header">Noisy GPS Results (3-8m noise)</h4>';
+    html += '<h4 class="metrics-header">Noisy GPS Results (1-3m noise)</h4>';
     html += buildTable(noisyEntries, noisyBest);
 
     document.getElementById('metrics-container').innerHTML = html;
