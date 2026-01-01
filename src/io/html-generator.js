@@ -608,10 +608,10 @@ export function generateHTML(data, filename) {
 
     // Layer definitions
     const LAYERS = {
-      groundTruth: { label: 'Ground Truth', color: '#22c55e', visible: true },
-      gpsPoints: { label: 'GPS Points', color: '#ef4444', visible: false },
+      groundTruth: { label: 'Ground Truth (25Hz)', color: '#22c55e', visible: true },
+      gpsPoints: { label: 'GPS Points (1Hz)', color: '#ef4444', visible: false },
       linear: { label: 'Linear Interp.', color: '#f97316', visible: false },
-      spline: { label: 'Spline', color: '#2563eb', visible: true },
+      spline: { label: 'Spline', color: '#2563eb', visible: false },
       speedLabels: { label: 'Speed Labels', color: '#8b5cf6', visible: true },
     };
 
@@ -1196,10 +1196,8 @@ export function generateHTML(data, filename) {
 
       const prefix = state.currentMode === 'clean' ? 'clean' : 'noisy';
 
-      // Ground Truth
-      leafletLayers.groundTruth = L.polyline(ld.groundTruth, {
-        color: '#22c55e', weight: 2, opacity: 0.7
-      });
+      // Ground Truth with speed-based gradient coloring
+      leafletLayers.groundTruth = createSpeedGradientTrack(ld.fullGroundTruth);
 
       // GPS Points
       const gpsData = state.currentMode === 'clean' ? ld.cleanGPS : ld.noisyGPS;
@@ -1288,6 +1286,61 @@ export function generateHTML(data, filename) {
       } else if (leafletLayers[key]) {
         map.removeLayer(leafletLayers[key]);
       }
+    }
+
+    // Create a speed-colored gradient track using polyline segments
+    function createSpeedGradientTrack(data) {
+      if (!data || data.length < 2) return L.layerGroup();
+
+      // Find min/max speed for normalization
+      const speeds = data.map(p => p.speed || 0);
+      const minSpeed = Math.min(...speeds);
+      const maxSpeed = Math.max(...speeds);
+      const speedRange = maxSpeed - minSpeed || 1;
+
+      // Color interpolation: red (slow) -> yellow -> green (fast)
+      function speedToColor(speed) {
+        const normalized = (speed - minSpeed) / speedRange; // 0 to 1
+
+        // RGB interpolation: red (255,0,0) -> yellow (255,255,0) -> green (0,200,0)
+        let r, g, b;
+        if (normalized < 0.5) {
+          // Red to Yellow (0-0.5)
+          const t = normalized * 2;
+          r = 255;
+          g = Math.round(255 * t);
+          b = 0;
+        } else {
+          // Yellow to Green (0.5-1)
+          const t = (normalized - 0.5) * 2;
+          r = Math.round(255 * (1 - t));
+          g = Math.round(255 - 55 * t); // 255 -> 200
+          b = 0;
+        }
+        return 'rgb(' + r + ',' + g + ',' + b + ')';
+      }
+
+      const layerGroup = L.layerGroup();
+
+      // Create polyline segments with gradient colors
+      for (let i = 0; i < data.length - 1; i++) {
+        const p1 = data[i];
+        const p2 = data[i + 1];
+        const avgSpeed = ((p1.speed || 0) + (p2.speed || 0)) / 2;
+        const color = speedToColor(avgSpeed);
+
+        const segment = L.polyline([[p1.lat, p1.lon], [p2.lat, p2.lon]], {
+          color: color,
+          weight: 6,
+          opacity: 0.9,
+          lineCap: 'round',
+          lineJoin: 'round'
+        });
+
+        layerGroup.addLayer(segment);
+      }
+
+      return layerGroup;
     }
 
     function buildLayerControls() {
