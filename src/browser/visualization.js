@@ -662,15 +662,25 @@ export class TelemetryVisualization {
       maxNativeZoom: 19
     });
 
-    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    const esriSatelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
       attribution: '© Esri',
       maxZoom: 21,
       maxNativeZoom: 18
     });
 
+    const googleSatelliteLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+      attribution: '© Google',
+      maxZoom: 21,
+      maxNativeZoom: 20
+    });
+
     // Add default layer and layer control
-    osmLayer.addTo(this.map);
-    L.control.layers({ 'Street': osmLayer, 'Satellite': satelliteLayer }, null, { position: 'bottomleft' }).addTo(this.map);
+    googleSatelliteLayer.addTo(this.map);
+    L.control.layers({
+      'Google Satellite': googleSatelliteLayer,
+      'Esri Satellite': esriSatelliteLayer,
+      'Street': osmLayer
+    }, null, { position: 'bottomleft' }).addTo(this.map);
 
     this.map.fitBounds(this.data.bounds, { padding: [30, 30] });
 
