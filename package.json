@@ -9,7 +9,10 @@
     "deploy": "gh-pages -d . -e . --src '{index.html,src/**}'"
   },
   "dependencies": {
-    "csv-parser": "^3.0.0"
+    "geodesy": "^2.4.0",
+    "kalman-filter": "^2.3.0",
+    "ml-matrix": "^6.12.1",
+    "papaparse": "^5.5.3"
   },
   "devDependencies": {
     "gh-pages": "^6.3.0"
