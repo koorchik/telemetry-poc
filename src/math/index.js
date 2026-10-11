@@ -16,6 +16,7 @@ export {
 
 export {
   gaussianRandom,
+  uniformRandom,
   seedRandom,
   gpsToLocal,
   localToGps,

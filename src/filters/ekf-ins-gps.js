@@ -6,6 +6,8 @@
 import CONFIG from '../config.js';
 import { matmul, transpose, eye, inverse, matvec } from '../math/matrix.js';
 import { gpsToLocal, localToGps, normalizeAngle } from '../math/geometry.js';
+import { alignChannel } from '../gps/resample.js';
+import { configuredDelays } from '../gps/delay-estimation.js';
 
 const DEG = Math.PI / 180;
 
@@ -22,7 +24,12 @@ const DEG = Math.PI / 180;
  * - b_a: longitudinal accelerometer bias (m/s²)
  */
 export class INSGPSFusion {
-  constructor() {
+  /**
+   * @param {number} [velocityDelay=0] - Seconds GPS speed and bearing lag behind GPS position
+   */
+  constructor(velocityDelay = 0) {
+    /** @type {number} GPS velocity delay (s) */
+    this.velocityDelay = velocityDelay;
     /** @type {number[]|null} State vector [6] */
     this.x = null;
     /** @type {number[][]|null} Covariance matrix [6x6] */
@@ -158,7 +165,7 @@ export class INSGPSFusion {
 
     // GPS velocity describes the motion a moment before the fix,
     // so compare it with the state rolled back by that delay
-    const delay = CONFIG.sampling.gpsVelocityDelay;
+    const delay = this.velocityDelay;
     const speedVar = cfg.gps_speed_noise * cfg.gps_speed_noise;
     this._updateScalar(2, gpsPoint.speed - (this.x[2] - this.accel * delay), speedVar);
 
@@ -246,15 +253,21 @@ function rtsSmooth(steps) {
  * Runs sensor fusion on telemetry data.
  * @param {Array} fullData - Full telemetry data at IMU rate
  * @param {Array} noisyGPS - GPS points (1Hz)
+ * @param {Object} [delays] - Channel delays in seconds: gpsVelocity, yaw_rate,
+ *   longitudinal_acc (see gps/delay-estimation.js). Defaults to CONFIG.sampling.
  * @returns {{filtered: Array, smoothed: Array}} Trajectories at IMU rate:
  *   filtered uses only past GPS fixes (real-time capable),
  *   smoothed also uses later ones (post-processing)
  */
-export function runSensorFusion(fullData, noisyGPS) {
+export function runSensorFusion(fullData, noisyGPS, delays = configuredDelays()) {
   if (noisyGPS.length === 0) return { filtered: [], smoothed: [] };
 
-  const ekf = new INSGPSFusion();
+  const ekf = new INSGPSFusion(delays.gpsVelocity);
   ekf.initialize(noisyGPS[0]);
+
+  // IMU channels report late; line them up with GPS position time
+  const yawRate = alignChannel(fullData, 'yaw_rate', delays.yaw_rate);
+  const longAcc = alignChannel(fullData, 'longitudinal_acc', delays.longitudinal_acc);
 
   // Current GPS measurement index
   let gpsIdx = 0;
@@ -270,11 +283,10 @@ export function runSensorFusion(fullData, noisyGPS) {
 
     // Prediction step (every IMU sample), using the mean IMU reading over the interval
     if (i > startIdx) {
-      const prev = fullData[i - 1];
       F = ekf.predict({
-        longitudinal_acc: 0.5 * (prev.longitudinal_acc + imu.longitudinal_acc),
-        yaw_rate: 0.5 * (prev.yaw_rate + imu.yaw_rate),
-      }, imu.timestamp - prev.timestamp);
+        longitudinal_acc: 0.5 * (longAcc[i - 1] + longAcc[i]),
+        yaw_rate: 0.5 * (yawRate[i - 1] + yawRate[i]),
+      }, imu.timestamp - fullData[i - 1].timestamp);
     }
 
     const xPred = ekf.x.slice();

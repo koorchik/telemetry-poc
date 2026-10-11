@@ -45,7 +45,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   padding: 12px;
   border-radius: 8px;
   border: 1px solid #2d3748;
-  max-width: 200px;
+  max-width: 230px;
 }
 .map-overlay h4 { font-size: 11px; color: #718096; text-transform: uppercase; margin-bottom: 8px; }
 
@@ -63,6 +63,92 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   border-radius: 50%;
   margin-right: 6px;
 }
+
+.layer-row { display: flex; align-items: center; gap: 8px; }
+.layer-row .layer-checkbox { flex: 1; }
+.layer-info-btn {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid #4a5568;
+  border-radius: 50%;
+  background: transparent;
+  color: #a0aec0;
+  font: italic 700 11px/1 Georgia, 'Times New Roman', serif;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.layer-info-btn:hover, .layer-info-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+.layer-info-panel {
+  position: absolute;
+  top: -1px;
+  left: calc(100% + 8px);
+  width: min(380px, calc(50vw - 270px));
+  min-width: 260px;
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  background: rgba(26, 26, 46, 0.97);
+  border: 1px solid #2d3748;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.layer-info-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid #2d3748;
+}
+.layer-info-header .color-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+.map-overlay .layer-info-header h4 {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  color: #eee;
+  text-transform: none;
+}
+.layer-info-close {
+  background: none;
+  border: none;
+  color: #a0aec0;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.layer-info-close:hover { color: #fff; }
+.layer-info-body {
+  padding: 4px 12px 12px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #cbd5e0;
+}
+.layer-info-body h5 {
+  margin: 12px 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #718096;
+}
+.layer-info-body p { margin-bottom: 6px; }
+.layer-info-body ul { margin: 0 0 6px 16px; }
+.layer-info-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.layer-info-body .layer-info-note { color: #718096; font-style: italic; }
 
 .charts-panel {
   grid-row: 2;
@@ -203,6 +289,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   background: #1a1a2e;
   padding: 12px 20px;
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
   justify-content: space-between;
   align-items: center;
   border-top: 1px solid #2d3748;
@@ -210,7 +298,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 
 .lap-selectors {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   align-items: center;
 }
 .lap-selector-group {
@@ -249,7 +338,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 
 .lap-info {
   display: flex;
-  gap: 24px;
+  flex-wrap: wrap;
+  gap: 4px 24px;
   font-size: 12px;
   color: #718096;
 }
@@ -326,6 +416,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   background: rgba(45, 55, 72, 0.5);
   border-radius: 4px;
 }
+.metrics-table tr.input td { color: #718096; font-style: italic; }
 .metrics-header {
   font-size: 11px;
   color: #718096;

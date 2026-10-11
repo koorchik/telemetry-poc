@@ -4,7 +4,7 @@
  */
 
 import CONFIG from '../config.js';
-import { gaussianRandom } from '../math/geometry.js';
+import { gaussianRandom, uniformRandom } from '../math/geometry.js';
 
 /**
  * Downsamples GPS data to 1Hz (keeping every Nth sample).
@@ -29,19 +29,21 @@ export function downsampleGPS(data) {
 
 /**
  * Adds Gaussian noise to GPS position, speed and bearing.
- * The reported accuracy is widened to match, as a real receiver would report it.
+ * Every fix gets its own position error level, drawn from the configured
+ * range, and reports it as its accuracy, as a real receiver would.
  * @param {Array} points - GPS points
+ * @param {Object} [noise] - Noise settings, defaults to CONFIG.noise
  * @returns {Array} Points with added noise
  */
-export function addGPSNoise(points) {
-  if (!CONFIG.noise.enabled) return points;
+export function addGPSNoise(points, noise = CONFIG.noise) {
+  if (!noise.enabled) return points;
 
-  const { minMeters, maxMeters, speedSigma, bearingSigmaDeg } = CONFIG.noise;
-  const avgNoise = (minMeters + maxMeters) / 2;
+  const { minMeters, maxMeters, speedSigma, bearingSigmaDeg } = noise;
 
   return points.map(p => {
-    const noiseLat = gaussianRandom(0, avgNoise);
-    const noiseLon = gaussianRandom(0, avgNoise);
+    const sigma = uniformRandom(minMeters, maxMeters);
+    const noiseLat = gaussianRandom(0, sigma);
+    const noiseLon = gaussianRandom(0, sigma);
     const cosLat = Math.cos(p.lat * Math.PI / 180);
     const accuracy = p.accuracy || 0;
 
@@ -51,7 +53,7 @@ export function addGPSNoise(points) {
       lon: p.lon + noiseLon / (CONFIG.METERS_PER_DEG_LAT * cosLat),
       speed: Math.max(0, p.speed + gaussianRandom(0, speedSigma)),
       bearing: (p.bearing + gaussianRandom(0, bearingSigmaDeg) + 360) % 360,
-      accuracy: Math.sqrt(accuracy * accuracy + avgNoise * avgNoise),
+      accuracy: Math.sqrt(accuracy * accuracy + sigma * sigma),
     };
   });
 }

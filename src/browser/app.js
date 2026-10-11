@@ -7,6 +7,7 @@
 import { processCSV } from "./process.js";
 // Import component to register custom element
 import "./components/telemetry-app.js";
+import { eventBus } from "./components/event-bus.js";
 
 // =====================================================
 // UI Elements
@@ -24,6 +25,9 @@ const backBtn = document.getElementById("back-btn");
 // State
 // =====================================================
 let currentViz = null;
+let currentCsv = null;
+// GPS noise range chosen in the UI; null means the default from CONFIG.noise
+let currentNoise = null;
 
 // =====================================================
 // File Handling
@@ -45,15 +49,20 @@ function handleFile(file) {
   reader.readAsText(file);
 }
 
+function runPipeline(csvText) {
+  return processCSV(csvText, currentNoise ? { noise: currentNoise } : {}, (stage, message) => {
+    updateProgress(message);
+  });
+}
+
 function processAndVisualize(csvText) {
-  showProgress("Starting... (can take up to a minute)");
+  showProgress("Starting...");
 
   // Use setTimeout to allow UI to update
   setTimeout(() => {
     try {
-      const data = processCSV(csvText, {}, (stage, message) => {
-        updateProgress(message);
-      });
+      const data = runPipeline(csvText);
+      currentCsv = csvText;
 
       showVisualization(data);
     } catch (err) {
@@ -85,6 +94,25 @@ function showUpload() {
   backBtn.style.display = "none";
   vizSection.innerHTML = "";
   currentViz = null;
+  currentCsv = null;
+}
+
+// A different noise level changes the fixes every algorithm is fed,
+// so the whole pipeline is run again on the same file
+function reprocessWithNoise(noise) {
+  if (!currentCsv || !currentViz) return;
+  currentNoise = noise;
+  showProgress(`Recomputing with ${noise.minMeters}-${noise.maxMeters} m GPS noise...`);
+
+  setTimeout(() => {
+    try {
+      currentViz.processedData = runPipeline(currentCsv);
+    } catch (err) {
+      console.error("Processing error:", err);
+      alert("Error processing CSV: " + err.message);
+    }
+    hideProgress();
+  }, 50);
 }
 
 // =====================================================
@@ -153,6 +181,9 @@ loadExampleBtn.addEventListener("click", async () => {
 
 // Back button
 backBtn.addEventListener("click", showUpload);
+
+// GPS noise level
+eventBus.on("noise-change", ({ noise }) => reprocessWithNoise(noise));
 
 // =====================================================
 // Initialization

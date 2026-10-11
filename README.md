@@ -60,23 +60,29 @@ Each check produces a score, and points exceeding the weighted threshold are rej
 
 Sample recording (car, 5 laps), GPS downsampled to 1 Hz, mean RMSE over laps. Reproduce with `node scripts/benchmark.js`.
 
-| GPS | Linear | Catmull-Rom | Hermite | EKF Raw | EKF + RTS |
-|-----|--------|-------------|---------|---------|-----------|
-| Clean | 0.62m | 0.26m | 0.06m | 0.21m | 0.08m |
-| Noisy (2m per axis) | 2.48m | 2.65m | 2.51m | 1.65m | 0.96m |
+| GPS noise (1σ per axis) | Fixes themselves | Linear | Catmull-Rom | Hermite | EKF Raw | EKF + RTS |
+|---|---|---|---|---|---|---|
+| Clean | 0 | 0.62m | 0.26m | 0.06m | 0.20m | 0.08m |
+| Light, 1-3 m | 2.95m | 2.45m | 2.67m | 2.54m | 1.43m | 0.83m |
+| Medium, 3-8 m | 8.06m | 6.56m | 7.26m | 6.93m | 3.25m | 2.19m |
+| Heavy, 5-15 m | 14.49m | 11.96m | 13.26m | 12.64m | 4.21m | 2.97m |
+
+The noise level is selected next to the Clean / Noisy switch (or `--noise=3-8` for the benchmark). Every fix gets its own error level from the range and reports it as its accuracy.
 
 ### Key Findings
 
 1. **GPS velocity matters for clean GPS** - Hermite is 4x more accurate than Catmull-Rom from the same fixes
 2. **Interpolation cannot remove noise** - Every interpolator passes through the noisy fixes, so its error equals the GPS error
-3. **Sensor fusion wins for noisy GPS** - The smoother cuts the error by about 60%; the forward filter by about 35%
+3. **Sensor fusion wins for noisy GPS** - The smoother cuts the error of the fixes by 70-80%; the forward filter by 50-70%
 4. **Timing matters more than tuning** - Rows are not 25 Hz (see below) and the channels are not aligned in time; fixing both changed the EKF error far more than any noise parameter
 
 The simulated noise is white (independent per fix), which is the easiest case for a filter. Real GPS error drifts slowly, and no IMU can see a constant position offset, so expect smaller gains on real noisy receivers.
 
 ### Data timing
 
-A RaceChrono export has one row per sample of *any* device, about 45 rows/s for this recording, irregularly spaced. Each lap is resampled onto a uniform 25 Hz grid before anything else. Channels also lag behind GPS position by different amounts (GPS speed/bearing ~90 ms, accelerations ~100 ms, gyroscope ~20 ms); these delays are set in `CONFIG.sampling` and are specific to the logging devices.
+A RaceChrono export has one row per sample of *any* device, about 45 rows/s for this recording, irregularly spaced. Each lap is resampled onto a uniform 25 Hz grid before anything else.
+
+Channels also lag behind GPS position by different amounts (here: GPS speed/bearing ~90 ms, acceleration ~110 ms, gyroscope ~0-20 ms). These delays depend on the logging devices, so they are estimated for every file, using only the 1 Hz fixes and the inertial data: over each second between two fixes, the integrated gyroscope must match the change of GPS bearing, the integrated acceleration the change of GPS speed, and the integrated velocity the distance between the fixes. The estimated values are shown above the metrics table. Without this alignment the smoother's error is about 70% higher on clean GPS and 25% higher on light-noise GPS.
 
 ## Usage
 
@@ -111,6 +117,7 @@ node src/index.js 3    # Process specific lap
 npm install
 node scripts/benchmark.js              # sample data
 node scripts/benchmark.js my-session.csv
+node scripts/benchmark.js --noise=3-8  # GPS noise range in metres
 ```
 
 Prints RMSE per lap and a metrics table for clean and noisy GPS, with a fixed noise seed.

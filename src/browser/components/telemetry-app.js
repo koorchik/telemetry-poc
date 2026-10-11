@@ -107,14 +107,19 @@ export class TelemetryApp extends LitElement {
   updated(changedProperties) {
     if (changedProperties.has('processedData') && this.processedData) {
       this._prepareData();
-      this._state = { ...this._state, currentLap: this._data.selectedLap };
+      // Keep the lap on screen when the same file is recomputed (e.g. another noise level)
+      const keepLap = this._data.laps.includes(this._state.currentLap);
+      this._state = {
+        ...this._state,
+        currentLap: keepLap ? this._state.currentLap : this._data.selectedLap,
+      };
       this.requestUpdate();
     }
   }
 
   // --- Data Preparation ---
   _prepareData() {
-    const { laps, allLapsData, selectedLap } = this.processedData;
+    const { laps, allLapsData, selectedLap, noise } = this.processedData;
 
     const downsample = (arr, ratio = 5) => (arr || []).filter((_, i) => i % ratio === 0);
     const toCoords = arr => (arr || []).map(p => [p.lat, p.lon]);
@@ -159,6 +164,7 @@ export class TelemetryApp extends LitElement {
         cleanMetrics: ld.cleanMetrics,
         noisyMetrics: ld.noisyMetrics,
         outliers: ld.outliers,
+        delays: ld.delays,
         duration: ld.duration,
         totalDistance: ld.totalDistance,
         chartData: ld.chartData,
@@ -185,6 +191,7 @@ export class TelemetryApp extends LitElement {
       selectedLap,
       lapsData: lapsMapData,
       bounds,
+      noise,
     };
   }
 
@@ -326,7 +333,11 @@ export class TelemetryApp extends LitElement {
             .layerVisibility="${this._state.layerVisibility}"
             .bounds="${this._data.bounds}"
           ></track-map>
-          <layer-controls .visibility="${this._state.layerVisibility}"></layer-controls>
+          <layer-controls
+            .visibility="${this._state.layerVisibility}"
+            .delays="${ld?.delays?.[this._state.currentMode]}"
+            .noise="${this._data.noise}"
+          ></layer-controls>
         </div>
 
         <div class="charts-panel">
@@ -363,6 +374,8 @@ export class TelemetryApp extends LitElement {
             .cleanMetrics="${ld?.cleanMetrics}"
             .noisyMetrics="${ld?.noisyMetrics}"
             .outliers="${ld?.outliers}"
+            .delays="${ld?.delays}"
+            .noise="${this._data.noise}"
             .mode="${this._state.currentMode}"
           ></metrics-table>
         </div>
@@ -379,6 +392,7 @@ export class TelemetryApp extends LitElement {
           .currentLap="${this._state.currentLap}"
           .comparisonLap="${this._state.comparisonLap}"
           .currentMode="${this._state.currentMode}"
+          .noise="${this._data.noise}"
           .lapInfo="${{ duration: ld?.duration, distance: ld?.totalDistance, points: ld?.cleanGPS?.length }}"
         ></lap-selector>
       </div>

@@ -18,10 +18,10 @@ function bearingDiff(a, b) {
  * GPS velocity lags the position, so it is advanced by the delay using
  * the rate of change between the neighbouring fixes.
  * @param {Array} gps - GPS points with timestamp, speed, bearing
+ * @param {number} delay - Seconds GPS velocity lags behind GPS position
  * @returns {Array} [{speed, bearing}] aligned with the fix positions
  */
-function velocityAtFixTime(gps) {
-  const delay = CONFIG.sampling.gpsVelocityDelay;
+function velocityAtFixTime(gps, delay) {
 
   return gps.map((p, i) => {
     const prev = gps[Math.max(0, i - 1)];
@@ -42,16 +42,17 @@ function velocityAtFixTime(gps) {
  * (speed + bearing) at its two ends.
  * @param {Array} fullData - Full data with timestamps
  * @param {Array} noisyGPS - GPS points (1Hz) with speed (m/s) and bearing (deg)
+ * @param {number} [velocityDelay] - Seconds GPS velocity lags behind GPS position
  * @returns {Array} Interpolated trajectory at fullData timestamps
  */
-export function applyHermiteInterpolation(fullData, noisyGPS) {
+export function applyHermiteInterpolation(fullData, noisyGPS, velocityDelay = CONFIG.sampling.gpsVelocityDelay) {
   if (noisyGPS.length < 2) return noisyGPS;
 
   const lat0 = noisyGPS[0].lat;
   const lon0 = noisyGPS[0].lon;
 
   // Position and velocity of each fix in local meters (East, North)
-  const velocities = velocityAtFixTime(noisyGPS);
+  const velocities = velocityAtFixTime(noisyGPS, velocityDelay);
   const knots = noisyGPS.map((p, i) => {
     const { px, py } = gpsToLocal(p.lat, p.lon, lat0, lon0);
     const bearing = velocities[i].bearing * Math.PI / 180;

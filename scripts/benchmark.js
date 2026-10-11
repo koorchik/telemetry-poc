@@ -2,7 +2,7 @@
  * Runs the processing pipeline on the sample data in Node.js and prints
  * accuracy metrics for every algorithm. Development tool, not part of the app.
  *
- * Usage: npm install && node scripts/benchmark.js [path/to/racechrono.csv]
+ * Usage: npm install && node scripts/benchmark.js [path/to/racechrono.csv] [--noise=3-8]
  */
 
 import { readFileSync } from 'node:fs';
@@ -10,7 +10,19 @@ import CONFIG from '../src/config.js';
 import { processCSV } from '../src/browser/process.js';
 import { printMetricsTable } from '../src/runner.js';
 
-const csvPath = process.argv[2] ?? new URL('../src/data/sample-data.csv', import.meta.url);
+const args = process.argv.slice(2);
+const noiseArg = args.find(a => a.startsWith('--noise='));
+const csvPath = args.find(a => !a.startsWith('--')) ?? new URL('../src/data/sample-data.csv', import.meta.url);
+
+// --noise=min-max selects the position error range of the noisy GPS set (m)
+const config = {};
+if (noiseArg) {
+  const [minMeters, maxMeters] = noiseArg.slice('--noise='.length).split('-').map(Number);
+  if (!(minMeters >= 0 && maxMeters >= minMeters)) {
+    throw new Error(`Invalid ${noiseArg}, expected e.g. --noise=3-8`);
+  }
+  config.noise = { minMeters, maxMeters };
+}
 
 // Repeatable noise so runs can be compared
 CONFIG.noise.seed = 42;
@@ -19,12 +31,21 @@ CONFIG.noise.seed = 42;
 const log = console.log;
 console.log = () => {};
 const started = Date.now();
-const { laps, allLapsData } = processCSV(readFileSync(csvPath, 'utf8'));
+const { laps, allLapsData, delays, noise } = processCSV(readFileSync(csvPath, 'utf8'), config);
 console.log = log;
 
 const algorithms = Object.keys(allLapsData[laps[0]].cleanMetrics);
 
 console.log(`Processed ${laps.length} laps in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+
+const CHANNELS = { gpsVelocity: 'GPS speed/bearing', yaw_rate: 'gyro', longitudinal_acc: 'accelerometer' };
+console.log(`\n   Channel delay behind GPS position (ms); * = not estimated, from CONFIG`);
+for (const [mode, d] of Object.entries(delays)) {
+  const cells = Object.entries(CHANNELS).map(([key, label]) =>
+    `${label} ${(d[key] * 1000).toFixed(0)}${d.estimated[key] ? '' : '*'}`
+  );
+  console.log(`   ${mode.padEnd(5)}  ${cells.join('   ')}`);
+}
 console.log(`\n   RMSE (m) per lap, clean / noisy GPS`);
 console.log(`   lap  dur(s)  fix(s)  outliers  ${algorithms.map(a => a.padStart(13)).join('')}`);
 
@@ -59,6 +80,6 @@ function average(key) {
   return result;
 }
 
-const { minMeters, maxMeters } = CONFIG.noise;
+const { minMeters, maxMeters } = noise;
 printMetricsTable(average('cleanMetrics'), `Clean GPS, mean over ${laps.length} laps (Max = worst lap)`);
 printMetricsTable(average('noisyMetrics'), `Noisy GPS (${minMeters}-${maxMeters}m), mean over ${laps.length} laps (Max = worst lap)`);

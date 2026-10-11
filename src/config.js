@@ -14,22 +14,30 @@ const CONFIG = {
   sampling: {
     imuHz: 25,      // IMU at 25Hz
     gpsHz: 1,       // GPS downsampled to 1Hz
-    // How far each channel lags behind GPS position (s). Measured on the
-    // sample recording by matching against position derivatives; these are
-    // properties of the logging devices, set to 0 when unknown.
-    gpsVelocityDelay: 0.09,  // speed + bearing reported with a fix
+    // How far each channel lags behind GPS position (s). These depend on the
+    // logging devices, so by default they are estimated for every file from
+    // its 1Hz fixes and IMU (gps/delay-estimation.js). The values below are
+    // used when autoDelay is off or a channel cannot be estimated.
+    autoDelay: true,
+    gpsVelocityDelay: 0,     // speed + bearing reported with a fix
     imuDelay: {
-      yaw_rate: 0.02,
-      longitudinal_acc: 0.11,
-      lateral_acc: 0.10,
+      yaw_rate: 0,
+      longitudinal_acc: 0,
     },
   },
 
   // GPS noise simulation
   noise: {
     enabled: true,  // Enable for testing
+    // Each fix gets its own error level (1 sigma per axis) from this range
     minMeters: 1,
     maxMeters: 3,
+    // Ranges offered in the UI
+    levels: [
+      { label: 'Light', minMeters: 1, maxMeters: 3 },
+      { label: 'Medium', minMeters: 3, maxMeters: 8 },
+      { label: 'Heavy', minMeters: 5, maxMeters: 15 },
+    ],
     speedSigma: 0.3,       // GPS speed noise (m/s)
     bearingSigmaDeg: 1.5,  // GPS bearing noise (deg)
     seed: null,            // Integer for repeatable noise, null for random

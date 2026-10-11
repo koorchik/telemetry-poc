@@ -5,28 +5,27 @@
  */
 
 import { parseCSVString } from '../io/csv-parser.js';
-import { downsampleGPS, addGPSNoise, filterGPSOutliers, resampleUniform } from '../gps/index.js';
+import {
+  downsampleGPS,
+  addGPSNoise,
+  filterGPSOutliers,
+  resampleUniform,
+  estimateChannelDelays,
+  configuredDelays,
+} from '../gps/index.js';
 import { enhanceTelemetryPoints, createChartData } from '../analysis/distance.js';
 import { runAllAlgorithms } from '../runner.js';
 import { seedRandom } from '../math/geometry.js';
 import CONFIG from '../config.js';
 
 /**
- * Default configuration for browser processing.
- */
-const DEFAULT_CONFIG = {
-  input: { skipLines: 12 },
-  sampling: { imuHz: 25, gpsHz: 1 },
-  noise: { enabled: true, minMeters: 3, maxMeters: 8 },
-};
-
-/**
- * Processes a single lap.
+ * Builds the ground truth and the simulated GPS fixes of a single lap.
  * @param {Array} fullDataRaw - Raw telemetry data
- * @param {number} lapNumber - Lap number to process
- * @returns {Object|null} Lap results or null if no data
+ * @param {number} lapNumber - Lap number to prepare
+ * @param {Object} noise - Noise settings for the noisy GPS set
+ * @returns {Object|null} Lap inputs or null if no data
  */
-function processLap(fullDataRaw, lapNumber) {
+function prepareLap(fullDataRaw, lapNumber, noise) {
   const lapDataRaw = fullDataRaw.filter(p => p.lap === lapNumber);
   if (lapDataRaw.length === 0) return null;
 
@@ -35,35 +34,54 @@ function processLap(fullDataRaw, lapNumber) {
   lapDataRaw.forEach(p => p.timestamp -= t0);
 
   // RaceChrono rows are irregular (~45/s); put them on a uniform grid
-  const lapDataUniform = resampleUniform(lapDataRaw, CONFIG.sampling.imuHz, CONFIG.sampling.imuDelay);
+  const lapDataUniform = resampleUniform(lapDataRaw, CONFIG.sampling.imuHz);
 
   // Enhance telemetry with distance, position, and lap time
   const { points: lapData, totalDistance, duration } = enhanceTelemetryPoints(lapDataUniform);
-
-  // Create chart data (downsampled to 2Hz for performance)
-  const chartData = createChartData(lapData, 2);
 
   // Downsample GPS
   const gpsDownsampled = downsampleGPS(lapData);
 
   // Clean GPS
   const cleanOutlierResult = filterGPSOutliers(gpsDownsampled);
-  const cleanGPS = cleanOutlierResult.filtered;
 
   // Noisy GPS
-  const noisyGPSRaw = addGPSNoise(gpsDownsampled);
-  const noisyOutlierResult = filterGPSOutliers(noisyGPSRaw);
-  const noisyGPS = noisyOutlierResult.filtered;
-
-  // Run all algorithms including EKF
-  const cleanResults = runAllAlgorithms(lapData, cleanGPS);
-  const noisyResults = runAllAlgorithms(lapData, noisyGPS);
+  const noisyOutlierResult = filterGPSOutliers(addGPSNoise(gpsDownsampled, noise));
 
   return {
     lap: lapNumber,
+    lapData,
+    totalDistance,
+    duration,
+    cleanGPS: cleanOutlierResult.filtered,
+    noisyGPS: noisyOutlierResult.filtered,
+    outliers: {
+      clean: cleanOutlierResult.outliers.length,
+      noisy: noisyOutlierResult.outliers.length,
+      total: gpsDownsampled.length,
+    },
+  };
+}
+
+/**
+ * Runs all algorithms on a prepared lap.
+ * @param {Object} prepared - Result of prepareLap
+ * @param {{clean: Object, noisy: Object}} delays - Channel delays per GPS set
+ * @returns {Object} Lap results
+ */
+function processLap(prepared, delays) {
+  const { lap, lapData, totalDistance, duration, cleanGPS, noisyGPS, outliers } = prepared;
+
+  // Run all algorithms including EKF
+  const cleanResults = runAllAlgorithms(lapData, cleanGPS, delays.clean);
+  const noisyResults = runAllAlgorithms(lapData, noisyGPS, delays.noisy);
+
+  return {
+    lap,
     groundTruth: lapData,
     totalDistance,
-    chartData,
+    // Chart data (downsampled to 2Hz for performance)
+    chartData: createChartData(lapData, 2),
     cleanGPS,
     noisyGPS,
     cleanLinear: cleanResults.linear,
@@ -78,11 +96,8 @@ function processLap(fullDataRaw, lapNumber) {
     noisyEkfSmooth: noisyResults.ekfSmooth,
     cleanMetrics: cleanResults.metrics,
     noisyMetrics: noisyResults.metrics,
-    outliers: {
-      clean: cleanOutlierResult.outliers.length,
-      noisy: noisyOutlierResult.outliers.length,
-      total: gpsDownsampled.length,
-    },
+    outliers,
+    delays,
     duration,
   };
 }
@@ -90,12 +105,16 @@ function processLap(fullDataRaw, lapNumber) {
 /**
  * Processes CSV text and returns visualization data.
  * @param {string} csvText - Raw CSV text
- * @param {Object} [config] - Optional configuration override
+ * @param {Object} [config] - Overrides of CONFIG.input and CONFIG.noise,
+ *   e.g. { noise: { minMeters: 3, maxMeters: 8 } }
  * @param {Function} [onProgress] - Progress callback (stage, message)
  * @returns {Object} Processed data ready for visualization
  */
 export function processCSV(csvText, config = {}, onProgress = () => {}) {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
+  const cfg = {
+    input: { ...CONFIG.input, ...config.input },
+    noise: { ...CONFIG.noise, ...config.noise },
+  };
   seedRandom(CONFIG.noise.seed);
 
   // 1. Parse CSV
@@ -117,57 +136,32 @@ export function processCSV(csvText, config = {}, onProgress = () => {}) {
 
   onProgress('laps', `Found ${laps.length} laps with ${fullDataRaw.length} points`);
 
-  // 3. Process all laps
+  // 3. Prepare ground truth and GPS fixes of every lap
+  const prepared = laps.map(lap => prepareLap(fullDataRaw, lap, cfg.noise));
+
+  // 4. Channel delays are a property of the recording, so they are estimated
+  //    once over all laps, separately from the clean and from the noisy fixes
+  onProgress('delays', 'Estimating sensor delays...');
+  const estimate = key => CONFIG.sampling.autoDelay
+    ? estimateChannelDelays(prepared.map(p => ({ imu: p.lapData, fixes: p[key] })))
+    : configuredDelays();
+  const delays = { clean: estimate('cleanGPS'), noisy: estimate('noisyGPS') };
+
+  // 5. Run the algorithms on all laps
   const allLapsData = {};
   for (let i = 0; i < laps.length; i++) {
-    const lap = laps[i];
-    onProgress('processing', `Processing lap ${lap} (${i + 1}/${laps.length})...`);
-    allLapsData[lap] = processLap(fullDataRaw, lap);
+    onProgress('processing', `Processing lap ${laps[i]} (${i + 1}/${laps.length})...`);
+    allLapsData[laps[i]] = processLap(prepared[i], delays);
   }
-
-  // 4. Run detailed analysis on first lap
-  const selectedLap = laps[0];
-  onProgress('analysis', `Running detailed EKF analysis on lap ${selectedLap}...`);
-
-  const fullDataRaw2 = fullDataRaw.filter(p => p.lap === selectedLap);
-  const t0 = fullDataRaw2[0].timestamp;
-  fullDataRaw2.forEach(p => p.timestamp -= t0);
-
-  const { points: fullData, totalDistance } = enhanceTelemetryPoints(
-    resampleUniform(fullDataRaw2, CONFIG.sampling.imuHz, CONFIG.sampling.imuDelay)
-  );
-
-  const gpsDownsampled = downsampleGPS(fullData);
-  const cleanOutliers = filterGPSOutliers(gpsDownsampled);
-  const cleanGPS = cleanOutliers.filtered;
-  const noisyGPSRaw = addGPSNoise(gpsDownsampled);
-  const noisyOutliers = filterGPSOutliers(noisyGPSRaw);
-  const noisyGPS = noisyOutliers.filtered;
-
-  // Run full algorithms with EKF
-  onProgress('ekf', 'Running EKF sensor fusion algorithms...');
-  const cleanResults = runAllAlgorithms(fullData, cleanGPS);
-  const noisyResults = runAllAlgorithms(fullData, noisyGPS);
 
   onProgress('complete', 'Processing complete!');
 
   return {
     laps,
-    selectedLap,
+    selectedLap: laps[0],
     allLapsData,
-    selectedLapData: {
-      groundTruth: fullData,
-      cleanGPS,
-      noisyGPS,
-      cleanResults,
-      noisyResults,
-      totalDistance,
-      outliers: {
-        clean: cleanOutliers.outliers.length,
-        noisy: noisyOutliers.outliers.length,
-        total: gpsDownsampled.length,
-      },
-    },
+    delays,
+    noise: cfg.noise,
     config: cfg,
   };
 }
