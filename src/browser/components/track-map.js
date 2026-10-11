@@ -39,6 +39,7 @@ export class TrackMap extends LitElement {
     this._comparisonTrackLayer = null;
     this._carMarker = null;
     this._comparisonMarker = null;
+    this._fittedLap = null;
 
     this._layerConfig = {
       groundTruth: { label: 'Ground Truth (25Hz)', color: '#22c55e' },
@@ -197,9 +198,12 @@ export class TrackMap extends LitElement {
     // Add visible layers
     this._updateLayerVisibility();
 
-    // Fit bounds
-    if (ld.groundTruth?.length > 0) {
-      this._map.fitBounds(ld.groundTruth, { padding: [30, 30] });
+    // Fit bounds when another lap is shown, not when its layers are rebuilt
+    const gt = ld.groundTruth;
+    const lapKey = gt?.length > 0 ? `${gt.length}:${gt[0]}:${gt[gt.length - 1]}` : null;
+    if (lapKey && lapKey !== this._fittedLap) {
+      this._map.fitBounds(gt, { padding: [30, 30] });
+      this._fittedLap = lapKey;
     }
 
     // Trajectory click handlers

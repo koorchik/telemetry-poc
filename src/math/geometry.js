@@ -31,6 +31,16 @@ export function seedRandom(seed = null) {
 }
 
 /**
+ * Generates a random number uniformly distributed between min and max.
+ * @param {number} min - Lower bound
+ * @param {number} max - Upper bound
+ * @returns {number} Random value
+ */
+export function uniformRandom(min, max) {
+  return min + random() * (max - min);
+}
+
+/**
  * Generates a random number from a Gaussian distribution using Box-Muller transform.
  * @param {number} [mean=0] - Mean of the distribution
  * @param {number} [stddev=1] - Standard deviation
