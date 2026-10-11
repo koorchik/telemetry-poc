@@ -30,8 +30,9 @@ export class MetricsTable extends LitElement {
   _algorithmLabels = {
     linear: 'Linear',
     spline: 'Spline (Catmull-Rom)',
+    hermite: 'Hermite (GPS velocity)',
     ekfRaw: 'EKF Raw',
-    ekfSmooth: 'EKF + Spline',
+    ekfSmooth: 'EKF + RTS smoother',
   };
 
   _findBest(entries) {

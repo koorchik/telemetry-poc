@@ -25,8 +25,9 @@ export class LayerControls extends LitElement {
       gpsPoints: { label: 'GPS Points (1Hz)', color: '#ef4444' },
       linear: { label: 'Linear Interp.', color: '#f97316' },
       spline: { label: 'Spline', color: '#2563eb' },
+      hermite: { label: 'Hermite (GPS velocity)', color: '#14b8a6' },
       ekfRaw: { label: 'EKF Raw', color: '#ec4899' },
-      ekfSmooth: { label: 'EKF + Spline', color: '#8b5cf6' },
+      ekfSmooth: { label: 'EKF + RTS', color: '#8b5cf6' },
       speedLabels: { label: 'Speed Labels', color: '#a855f7' },
     };
   }

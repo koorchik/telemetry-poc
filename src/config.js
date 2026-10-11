@@ -14,6 +14,15 @@ const CONFIG = {
   sampling: {
     imuHz: 25,      // IMU at 25Hz
     gpsHz: 1,       // GPS downsampled to 1Hz
+    // How far each channel lags behind GPS position (s). Measured on the
+    // sample recording by matching against position derivatives; these are
+    // properties of the logging devices, set to 0 when unknown.
+    gpsVelocityDelay: 0.09,  // speed + bearing reported with a fix
+    imuDelay: {
+      yaw_rate: 0.02,
+      longitudinal_acc: 0.11,
+      lateral_acc: 0.10,
+    },
   },
 
   // GPS noise simulation
@@ -21,6 +30,9 @@ const CONFIG = {
     enabled: true,  // Enable for testing
     minMeters: 1,
     maxMeters: 3,
+    speedSigma: 0.3,       // GPS speed noise (m/s)
+    bearingSigmaDeg: 1.5,  // GPS bearing noise (deg)
+    seed: null,            // Integer for repeatable noise, null for random
   },
 
   // GPS-only Kalman Filter (for comparison)
@@ -30,13 +42,19 @@ const CONFIG = {
     initialP: 100,
   },
 
-  // INS/GPS Sensor Fusion EKF
+  // INS/GPS Sensor Fusion EKF (vehicle model, see filters/ekf-ins-gps.js)
   ekf: {
-    sigma_accel: 0.5,       // Accelerometer noise (m/s²)
-    sigma_gyro: 0.02,       // Gyroscope noise (rad/s)
-    sigma_bias: 0.001,      // Random walk bias
-    gps_pos_noise: 5.0,     // GPS position noise (m)
-    min_speed_for_heading: 2.0,  // Min speed for heading initialization (m/s)
+    // Process noise, per sqrt(second)
+    sigma_pos: 0.02,          // Unmodelled sideways motion (m)
+    sigma_speed: 1.0,         // Longitudinal accelerometer error (m/s)
+    sigma_course_deg: 3.0,    // Gyro error + slip angle changes (deg)
+    sigma_gyro_bias: 0.02,    // Gyro bias random walk (deg/s)
+    sigma_accel_bias: 0.05,   // Accelerometer bias random walk (m/s²)
+    // Measurement noise
+    gps_pos_noise: 5.0,       // GPS position noise when a fix has no accuracy (m)
+    gps_speed_noise: 0.3,     // GPS speed noise (m/s)
+    gps_course_noise_deg: 1.5,  // GPS course noise at speed (deg)
+    min_speed_for_heading: 2.0,  // Below this GPS course is not used (m/s)
   },
 
   // Outlier detection - Physics-based multi-criteria validation

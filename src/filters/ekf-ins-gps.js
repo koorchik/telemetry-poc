@@ -1,26 +1,31 @@
 /**
- * 7-State Extended Kalman Filter for INS/GPS Sensor Fusion.
+ * 6-State Extended Kalman Filter + RTS smoother for INS/GPS Sensor Fusion.
  * @module filters/ekf-ins-gps
  */
 
 import CONFIG from '../config.js';
-import { matmul, matadd, matsub, transpose, eye, inverse, matvec } from '../math/matrix.js';
+import { matmul, transpose, eye, inverse, matvec } from '../math/matrix.js';
 import { gpsToLocal, localToGps, normalizeAngle } from '../math/geometry.js';
 
+const DEG = Math.PI / 180;
+
 /**
- * INS/GPS Sensor Fusion using 7-state Extended Kalman Filter.
+ * INS/GPS Sensor Fusion using a 6-state Extended Kalman Filter with a vehicle
+ * motion model: the car moves along its course, so the gyroscope steers the
+ * course and the longitudinal accelerometer changes the speed.
  *
- * State vector: [px, py, vx, vy, psi, b_ax, b_ay]
- * - px, py: position in local coordinates (m)
- * - vx, vy: velocity (m/s)
- * - psi: heading (rad, from North, clockwise)
- * - b_ax, b_ay: accelerometer bias (m/s²)
+ * State vector: [px, py, v, psi, b_g, b_a]
+ * - px, py: position in local coordinates (m, East / North)
+ * - v: speed along the course (m/s)
+ * - psi: course over ground (rad, from North, clockwise, not wrapped)
+ * - b_g: gyroscope bias (rad/s)
+ * - b_a: longitudinal accelerometer bias (m/s²)
  */
 export class INSGPSFusion {
   constructor() {
-    /** @type {number[]|null} State vector [7] */
+    /** @type {number[]|null} State vector [6] */
     this.x = null;
-    /** @type {number[][]|null} Covariance matrix [7x7] */
+    /** @type {number[][]|null} Covariance matrix [6x6] */
     this.P = null;
     /** @type {number|null} Reference latitude */
     this.lat0 = null;
@@ -28,164 +33,168 @@ export class INSGPSFusion {
     this.lon0 = null;
     /** @type {boolean} Whether filter is initialized */
     this.initialized = false;
+    /** @type {number} Course rate used in the last prediction (rad/s) */
+    this.omega = 0;
+    /** @type {number} Acceleration used in the last prediction (m/s²) */
+    this.accel = 0;
   }
 
   /**
    * Initializes the filter from first GPS measurement.
-   * @param {Object} gpsPoint - GPS point with lat, lon, bearing, speed
+   * @param {Object} gpsPoint - GPS point with lat, lon, bearing, speed, accuracy
    */
   initialize(gpsPoint) {
     this.lat0 = gpsPoint.lat;
     this.lon0 = gpsPoint.lon;
 
-    // Heading from GPS bearing (deg → rad)
-    const psi0 = gpsPoint.bearing * Math.PI / 180;
+    const speed = gpsPoint.speed || 0;
+    const psi0 = (gpsPoint.bearing || 0) * DEG;
+    const r = gpsPoint.accuracy || CONFIG.ekf.gps_pos_noise;
 
-    // Velocity from GPS
-    const speed = gpsPoint.speed;
-    const vx0 = speed * Math.sin(psi0);  // East
-    const vy0 = speed * Math.cos(psi0);  // North
+    // GPS course means nothing while standing still
+    const psiVar = speed > CONFIG.ekf.min_speed_for_heading ? 0.05 : Math.PI * Math.PI;
 
-    // State: [px, py, vx, vy, psi, b_ax, b_ay]
-    this.x = [0, 0, vx0, vy0, psi0, 0, 0];
+    // State: [px, py, v, psi, b_g, b_a]
+    this.x = [0, 0, speed, psi0, 0, 0];
 
     // Initial covariance
     this.P = [
-      [10,  0,   0,   0,   0,    0,    0],     // px
-      [0,   10,  0,   0,   0,    0,    0],     // py
-      [0,   0,   1,   0,   0,    0,    0],     // vx
-      [0,   0,   0,   1,   0,    0,    0],     // vy
-      [0,   0,   0,   0,   0.1,  0,    0],     // psi
-      [0,   0,   0,   0,   0,    0.1,  0],     // b_ax
-      [0,   0,   0,   0,   0,    0,    0.1],   // b_ay
+      [r * r, 0,     0, 0,      0,      0],     // px
+      [0,     r * r, 0, 0,      0,      0],     // py
+      [0,     0,     1, 0,      0,      0],     // v
+      [0,     0,     0, psiVar, 0,      0],     // psi
+      [0,     0,     0, 0,      0.0004, 0],     // b_g  (~1 deg/s)
+      [0,     0,     0, 0,      0,      0.25],  // b_a
     ];
 
     this.initialized = true;
   }
 
   /**
-   * Prediction step (called at IMU rate, 25Hz).
-   * @param {Object} imu - IMU data with lateral_acc, longitudinal_acc, yaw_rate
+   * Prediction step (called at IMU rate).
+   * @param {Object} imu - IMU data with longitudinal_acc (G) and yaw_rate (deg/s)
    * @param {number} dt - Time delta in seconds
+   * @returns {number[][]|null} State transition Jacobian F [6x6]
    */
   predict(imu, dt) {
-    if (!this.initialized) return;
+    if (!this.initialized) return null;
 
-    const [px, py, vx, vy, psi, b_ax, b_ay] = this.x;
+    const [px, py, v, psi, b_g, b_a] = this.x;
 
     // IMU preprocessing
-    // RaceChrono has inverted signs for some axes
-    const a_lateral = -imu.lateral_acc * CONFIG.G - b_ax;
-    const a_longitudinal = imu.longitudinal_acc * CONFIG.G - b_ay;
-    const omega_z = -imu.yaw_rate * Math.PI / 180;
+    // RaceChrono yaw rate is counter-clockwise positive, course is clockwise
+    const omega = -imu.yaw_rate * DEG - b_g;
+    const accel = imu.longitudinal_acc * CONFIG.G - b_a;
 
-    // Body → World transformation (ENU: East-North-Up)
-    const cos_psi = Math.cos(psi);
-    const sin_psi = Math.sin(psi);
-
-    // Rotation matrix: body → world
-    const ax_world = a_lateral * cos_psi + a_longitudinal * sin_psi;
-    const ay_world = -a_lateral * sin_psi + a_longitudinal * cos_psi;
-
-    // State prediction
-    const px_new = px + vx * dt + 0.5 * ax_world * dt * dt;
-    const py_new = py + vy * dt + 0.5 * ay_world * dt * dt;
-    const vx_new = vx + ax_world * dt;
-    const vy_new = vy + ay_world * dt;
-    const psi_new = normalizeAngle(psi + omega_z * dt);
-    const b_ax_new = b_ax;  // Bias random walk
-    const b_ay_new = b_ay;
-
-    // Jacobian F (7x7)
+    // Midpoint integration
+    const psi_mid = psi + 0.5 * omega * dt;
+    const v_mid = v + 0.5 * accel * dt;
+    const sin_psi = Math.sin(psi_mid);
+    const cos_psi = Math.cos(psi_mid);
     const dt2 = dt * dt;
 
-    // Partial derivatives of world acceleration w.r.t. psi
-    const dax_dpsi = -a_lateral * sin_psi + a_longitudinal * cos_psi;
-    const day_dpsi = -a_lateral * cos_psi - a_longitudinal * sin_psi;
-
+    // Jacobian F (6x6)
     const F = [
-      [1, 0, dt, 0, dax_dpsi * dt2 * 0.5, -cos_psi * dt2 * 0.5, -sin_psi * dt2 * 0.5],
-      [0, 1, 0, dt, day_dpsi * dt2 * 0.5, sin_psi * dt2 * 0.5, -cos_psi * dt2 * 0.5],
-      [0, 0, 1, 0, dax_dpsi * dt, -cos_psi * dt, -sin_psi * dt],
-      [0, 0, 0, 1, day_dpsi * dt, sin_psi * dt, -cos_psi * dt],
-      [0, 0, 0, 0, 1, 0, 0],
-      [0, 0, 0, 0, 0, 1, 0],
-      [0, 0, 0, 0, 0, 0, 1],
+      [1, 0, sin_psi * dt, v_mid * cos_psi * dt, -0.5 * v_mid * cos_psi * dt2, -0.5 * sin_psi * dt2],
+      [0, 1, cos_psi * dt, -v_mid * sin_psi * dt, 0.5 * v_mid * sin_psi * dt2, -0.5 * cos_psi * dt2],
+      [0, 0, 1, 0, 0, -dt],
+      [0, 0, 0, 1, -dt, 0],
+      [0, 0, 0, 0, 1, 0],
+      [0, 0, 0, 0, 0, 1],
     ];
 
-    // Process noise Q
-    const sa = CONFIG.ekf.sigma_accel;
-    const sg = CONFIG.ekf.sigma_gyro;
-    const sb = CONFIG.ekf.sigma_bias;
-
-    const q_pos = sa * sa * dt2 * dt2 / 4;
-    const q_vel = sa * sa * dt2;
-    const q_psi = sg * sg * dt2;
-    const q_bias = sb * sb * dt;
-
-    const Q = [
-      [q_pos, 0, 0, 0, 0, 0, 0],
-      [0, q_pos, 0, 0, 0, 0, 0],
-      [0, 0, q_vel, 0, 0, 0, 0],
-      [0, 0, 0, q_vel, 0, 0, 0],
-      [0, 0, 0, 0, q_psi, 0, 0],
-      [0, 0, 0, 0, 0, q_bias, 0],
-      [0, 0, 0, 0, 0, 0, q_bias],
+    // Process noise Q (random walks, variance grows with dt)
+    const cfg = CONFIG.ekf;
+    const q = [
+      cfg.sigma_pos * cfg.sigma_pos * dt,
+      cfg.sigma_pos * cfg.sigma_pos * dt,
+      cfg.sigma_speed * cfg.sigma_speed * dt,
+      Math.pow(cfg.sigma_course_deg * DEG, 2) * dt,
+      Math.pow(cfg.sigma_gyro_bias * DEG, 2) * dt,
+      cfg.sigma_accel_bias * cfg.sigma_accel_bias * dt,
     ];
 
     // Covariance prediction: P = F * P * F' + Q
-    this.P = matadd(matmul(F, matmul(this.P, transpose(F))), Q);
+    this.P = matmul(F, matmul(this.P, transpose(F)));
+    for (let i = 0; i < 6; i++) {
+      this.P[i][i] += q[i];
+    }
+
+    this.omega = omega;
+    this.accel = accel;
 
     // Update state
-    this.x = [px_new, py_new, vx_new, vy_new, psi_new, b_ax_new, b_ay_new];
+    this.x = [
+      px + v_mid * sin_psi * dt,
+      py + v_mid * cos_psi * dt,
+      v + accel * dt,
+      psi + omega * dt,
+      b_g,
+      b_a,
+    ];
+
+    return F;
   }
 
   /**
    * Update step (called when GPS available, 1Hz).
-   * @param {Object} gpsPoint - GPS point with lat, lon, accuracy
+   * Position, speed and course are independent, so each is applied
+   * as its own scalar update.
+   * @param {Object} gpsPoint - GPS point with lat, lon, speed, bearing, accuracy
    */
   update(gpsPoint) {
     if (!this.initialized) return;
 
+    const cfg = CONFIG.ekf;
+
     // GPS → local coordinates
     const { px: z_px, py: z_py } = gpsToLocal(gpsPoint.lat, gpsPoint.lon, this.lat0, this.lon0);
 
-    // Measurement vector
-    const z = [z_px, z_py];
+    const r = gpsPoint.accuracy || cfg.gps_pos_noise;
+    this._updateScalar(0, z_px - this.x[0], r * r);
+    this._updateScalar(1, z_py - this.x[1], r * r);
 
-    // Measurement matrix H (2x7)
-    const H = [
-      [1, 0, 0, 0, 0, 0, 0],
-      [0, 1, 0, 0, 0, 0, 0],
-    ];
+    if (gpsPoint.speed === undefined) return;
 
-    // Measurement noise R
-    const r = gpsPoint.accuracy || CONFIG.ekf.gps_pos_noise;
-    const R = [
-      [r * r, 0],
-      [0, r * r],
-    ];
+    // GPS velocity describes the motion a moment before the fix,
+    // so compare it with the state rolled back by that delay
+    const delay = CONFIG.sampling.gpsVelocityDelay;
+    const speedVar = cfg.gps_speed_noise * cfg.gps_speed_noise;
+    this._updateScalar(2, gpsPoint.speed - (this.x[2] - this.accel * delay), speedVar);
 
-    // Innovation
-    const h_x = [this.x[0], this.x[1]];
-    const y = [z[0] - h_x[0], z[1] - h_x[1]];
-
-    // Innovation covariance: S = H * P * H' + R
-    const S = matadd(matmul(H, matmul(this.P, transpose(H))), R);
-
-    // Kalman gain: K = P * H' * S^-1
-    const K = matmul(matmul(this.P, transpose(H)), inverse(S));
-
-    // State update: x = x + K * y
-    const Ky = matvec(K, y);
-    for (let i = 0; i < 7; i++) {
-      this.x[i] += Ky[i];
+    if (gpsPoint.bearing !== undefined && gpsPoint.speed > cfg.min_speed_for_heading) {
+      // Course error is velocity error seen from the side, so it grows as speed drops
+      const courseSigma = Math.max(cfg.gps_course_noise_deg * DEG, cfg.gps_speed_noise / gpsPoint.speed);
+      const innovation = normalizeAngle(gpsPoint.bearing * DEG - (this.x[3] - this.omega * delay));
+      this._updateScalar(3, innovation, courseSigma * courseSigma);
     }
-    this.x[4] = normalizeAngle(this.x[4]);
+  }
 
-    // Covariance update: P = (I - K*H) * P
-    const IKH = matsub(eye(7), matmul(K, H));
-    this.P = matmul(IKH, this.P);
+  /**
+   * Kalman update for a direct measurement of one state.
+   * @param {number} idx - Index of the measured state
+   * @param {number} innovation - Measurement minus predicted value
+   * @param {number} variance - Measurement noise variance
+   */
+  _updateScalar(idx, innovation, variance) {
+    const P = this.P;
+    const S = P[idx][idx] + variance;
+    const K = P.map(row => row[idx] / S);
+    const Prow = P[idx].slice();
+
+    for (let i = 0; i < 6; i++) {
+      this.x[i] += K[i] * innovation;
+      for (let j = 0; j < 6; j++) {
+        P[i][j] -= K[i] * Prow[j];
+      }
+    }
+
+    // Keep the covariance symmetric
+    for (let i = 0; i < 6; i++) {
+      for (let j = i + 1; j < 6; j++) {
+        P[i][j] = P[j][i] = 0.5 * (P[i][j] + P[j][i]);
+      }
+    }
   }
 
   /**
@@ -204,44 +213,72 @@ export class INSGPSFusion {
    */
   getSpeed() {
     if (!this.initialized) return 0;
-    return Math.sqrt(this.x[2] * this.x[2] + this.x[3] * this.x[3]);
+    return Math.abs(this.x[2]);
   }
+}
+
+/**
+ * Rauch-Tung-Striebel backward pass over a stored forward EKF run.
+ * @param {Array} steps - Per-sample { xPred, PPred, F, x, P } from the forward pass
+ * @returns {number[][]} Smoothed state vectors
+ */
+function rtsSmooth(steps) {
+  const n = steps.length;
+  const smoothed = new Array(n);
+  smoothed[n - 1] = steps[n - 1].x;
+
+  for (let k = n - 2; k >= 0; k--) {
+    const next = steps[k + 1];
+
+    // Smoother gain: C = P_k * F' * P_pred^-1
+    const C = matmul(matmul(steps[k].P, transpose(next.F)), inverse(next.PPred));
+
+    // x_smooth[k] = x[k] + C * (x_smooth[k+1] - x_pred[k+1])
+    const diff = smoothed[k + 1].map((value, i) => value - next.xPred[i]);
+    const correction = matvec(C, diff);
+    smoothed[k] = steps[k].x.map((value, i) => value + correction[i]);
+  }
+
+  return smoothed;
 }
 
 /**
  * Runs sensor fusion on telemetry data.
  * @param {Array} fullData - Full telemetry data at IMU rate
  * @param {Array} noisyGPS - GPS points (1Hz)
- * @returns {Array} Fused trajectory at IMU rate
+ * @returns {{filtered: Array, smoothed: Array}} Trajectories at IMU rate:
+ *   filtered uses only past GPS fixes (real-time capable),
+ *   smoothed also uses later ones (post-processing)
  */
 export function runSensorFusion(fullData, noisyGPS) {
+  if (noisyGPS.length === 0) return { filtered: [], smoothed: [] };
+
   const ekf = new INSGPSFusion();
-  const trajectory = [];
-
-  // Find initialization point (speed > threshold)
-  let initIdx = 0;
-  for (let i = 0; i < noisyGPS.length; i++) {
-    if (noisyGPS[i].speed > CONFIG.ekf.min_speed_for_heading) {
-      initIdx = i;
-      break;
-    }
-  }
-
-  ekf.initialize(noisyGPS[initIdx]);
+  ekf.initialize(noisyGPS[0]);
 
   // Current GPS measurement index
-  let gpsIdx = initIdx;
-  let nextGpsTime = noisyGPS[gpsIdx + 1]?.timestamp ?? Infinity;
+  let gpsIdx = 0;
+  let nextGpsTime = noisyGPS[1]?.timestamp ?? Infinity;
 
   // Start from corresponding index in full data
-  const startIdx = noisyGPS[initIdx].originalIndex || 0;
+  const startIdx = noisyGPS[0].originalIndex || 0;
+  const steps = [];
 
   for (let i = startIdx; i < fullData.length; i++) {
     const imu = fullData[i];
-    const dt = 1 / CONFIG.sampling.imuHz;  // 0.04s
+    let F = eye(6);
 
-    // Prediction step (every IMU sample)
-    ekf.predict(imu, dt);
+    // Prediction step (every IMU sample), using the mean IMU reading over the interval
+    if (i > startIdx) {
+      const prev = fullData[i - 1];
+      F = ekf.predict({
+        longitudinal_acc: 0.5 * (prev.longitudinal_acc + imu.longitudinal_acc),
+        yaw_rate: 0.5 * (prev.yaw_rate + imu.yaw_rate),
+      }, imu.timestamp - prev.timestamp);
+    }
+
+    const xPred = ekf.x.slice();
+    const PPred = ekf.P.map(row => row.slice());
 
     // Check if new GPS available
     if (imu.timestamp >= nextGpsTime && gpsIdx + 1 < noisyGPS.length) {
@@ -250,16 +287,23 @@ export function runSensorFusion(fullData, noisyGPS) {
       nextGpsTime = noisyGPS[gpsIdx + 1]?.timestamp ?? Infinity;
     }
 
-    // Save trajectory point
-    const pos = ekf.getPosition();
-    if (pos) {
-      trajectory.push({
-        timestamp: imu.timestamp,
-        lat: pos.lat,
-        lon: pos.lon,
-      });
-    }
+    steps.push({
+      timestamp: imu.timestamp,
+      xPred,
+      PPred,
+      F,
+      x: ekf.x.slice(),
+      P: ekf.P.map(row => row.slice()),
+    });
   }
 
-  return trajectory;
+  const toTrajectory = states => states.map((x, k) => {
+    const { lat, lon } = localToGps(x[0], x[1], ekf.lat0, ekf.lon0);
+    return { timestamp: steps[k].timestamp, lat, lon };
+  });
+
+  return {
+    filtered: toTrajectory(steps.map(s => s.x)),
+    smoothed: toTrajectory(rtsSmooth(steps)),
+  };
 }

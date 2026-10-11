@@ -28,25 +28,30 @@ export function downsampleGPS(data) {
 }
 
 /**
- * Adds Gaussian noise to GPS coordinates.
+ * Adds Gaussian noise to GPS position, speed and bearing.
+ * The reported accuracy is widened to match, as a real receiver would report it.
  * @param {Array} points - GPS points
  * @returns {Array} Points with added noise
  */
 export function addGPSNoise(points) {
   if (!CONFIG.noise.enabled) return points;
 
-  const { minMeters, maxMeters } = CONFIG.noise;
+  const { minMeters, maxMeters, speedSigma, bearingSigmaDeg } = CONFIG.noise;
   const avgNoise = (minMeters + maxMeters) / 2;
 
   return points.map(p => {
     const noiseLat = gaussianRandom(0, avgNoise);
     const noiseLon = gaussianRandom(0, avgNoise);
     const cosLat = Math.cos(p.lat * Math.PI / 180);
+    const accuracy = p.accuracy || 0;
 
     return {
       ...p,
       lat: p.lat + noiseLat / CONFIG.METERS_PER_DEG_LAT,
       lon: p.lon + noiseLon / (CONFIG.METERS_PER_DEG_LAT * cosLat),
+      speed: Math.max(0, p.speed + gaussianRandom(0, speedSigma)),
+      bearing: (p.bearing + gaussianRandom(0, bearingSigmaDeg) + 360) % 360,
+      accuracy: Math.sqrt(accuracy * accuracy + avgNoise * avgNoise),
     };
   });
 }

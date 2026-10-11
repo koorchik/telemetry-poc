@@ -3,6 +3,8 @@
  * @module interpolation/spline
  */
 
+import { projectByVelocity } from '../math/geometry.js';
+
 /**
  * Catmull-Rom spline basis function evaluation.
  * @param {number} p0 - Control point before segment start
@@ -47,12 +49,10 @@ export function applySplineInterpolation(fullData, noisyGPS) {
     }
 
     if (gpsIdx >= noisyGPS.length - 1) {
-      // Beyond GPS data
-      result.push({
-        timestamp: t,
-        lat: noisyGPS[noisyGPS.length - 1].lat,
-        lon: noisyGPS[noisyGPS.length - 1].lon
-      });
+      // Beyond GPS data: continue along the last fix's velocity
+      const last = noisyGPS[noisyGPS.length - 1];
+      const { lat, lon } = projectByVelocity(last, t - last.timestamp);
+      result.push({ timestamp: t, lat, lon });
       continue;
     }
 

@@ -45,8 +45,9 @@ export class TrackMap extends LitElement {
       gpsPoints: { label: 'GPS Points (1Hz)', color: '#ef4444' },
       linear: { label: 'Linear Interp.', color: '#f97316' },
       spline: { label: 'Spline', color: '#2563eb' },
+      hermite: { label: 'Hermite (GPS velocity)', color: '#14b8a6' },
       ekfRaw: { label: 'EKF Raw', color: '#ec4899' },
-      ekfSmooth: { label: 'EKF + Spline', color: '#8b5cf6' },
+      ekfSmooth: { label: 'EKF + RTS', color: '#8b5cf6' },
       speedLabels: { label: 'Speed Labels', color: '#a855f7' },
     };
   }
@@ -162,6 +163,7 @@ export class TrackMap extends LitElement {
     // Algorithms
     this._layers.linear = L.polyline(ld[prefix + 'Linear'] || [], { color: '#f97316', weight: 2, opacity: 0.8, dashArray: '5, 5' });
     this._layers.spline = L.polyline(ld[prefix + 'Spline'] || [], { color: '#2563eb', weight: 3, opacity: 0.9 });
+    this._layers.hermite = L.polyline(ld[prefix + 'Hermite'] || [], { color: '#14b8a6', weight: 3, opacity: 0.9 });
     this._layers.ekfRaw = L.polyline(ld[prefix + 'EkfRaw'] || [], { color: '#ec4899', weight: 2, opacity: 0.8, dashArray: '3, 3' });
     this._layers.ekfSmooth = L.polyline(ld[prefix + 'EkfSmooth'] || [], { color: '#8b5cf6', weight: 3, opacity: 0.9 });
 
@@ -204,6 +206,7 @@ export class TrackMap extends LitElement {
     const onTrajectoryClick = (e) => this._onTrajectoryClick(e);
     this._layers.groundTruth.on('click', onTrajectoryClick);
     this._layers.spline.on('click', onTrajectoryClick);
+    this._layers.hermite.on('click', onTrajectoryClick);
     this._layers.ekfRaw.on('click', onTrajectoryClick);
     this._layers.ekfSmooth.on('click', onTrajectoryClick);
   }

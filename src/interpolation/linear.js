@@ -3,6 +3,8 @@
  * @module interpolation/linear
  */
 
+import { projectByVelocity } from '../math/geometry.js';
+
 /**
  * Applies linear interpolation between GPS points.
  * @param {Array} fullData - Full data with timestamps
@@ -25,11 +27,10 @@ export function applyLinearInterpolation(fullData, noisyGPS) {
     }
 
     if (gpsIdx >= noisyGPS.length - 1) {
-      result.push({
-        timestamp: t,
-        lat: noisyGPS[noisyGPS.length - 1].lat,
-        lon: noisyGPS[noisyGPS.length - 1].lon
-      });
+      // Beyond GPS data: continue along the last fix's velocity
+      const last = noisyGPS[noisyGPS.length - 1];
+      const { lat, lon } = projectByVelocity(last, t - last.timestamp);
+      result.push({ timestamp: t, lat, lon });
       continue;
     }
 
