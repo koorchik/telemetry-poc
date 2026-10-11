@@ -16,8 +16,10 @@ export {
 
 export {
   gaussianRandom,
+  seedRandom,
   gpsToLocal,
   localToGps,
+  projectByVelocity,
   normalizeAngle,
   haversineDistance,
 } from './geometry.js';

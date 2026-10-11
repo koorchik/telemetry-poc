@@ -7,6 +7,29 @@
 import CONFIG from '../config.js';
 import LatLon from 'geodesy/latlon-spherical.js';
 
+let random = Math.random;
+
+/**
+ * Switches the random source used by gaussianRandom.
+ * @param {number|null} [seed] - Integer seed for a repeatable sequence, or null for Math.random
+ */
+export function seedRandom(seed = null) {
+  if (seed === null || seed === undefined) {
+    random = Math.random;
+    return;
+  }
+
+  // mulberry32
+  let state = seed >>> 0;
+  random = () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let z = state;
+    z = Math.imul(z ^ (z >>> 15), z | 1);
+    z ^= z + Math.imul(z ^ (z >>> 7), z | 61);
+    return ((z ^ (z >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /**
  * Generates a random number from a Gaussian distribution using Box-Muller transform.
  * @param {number} [mean=0] - Mean of the distribution
@@ -14,8 +37,8 @@ import LatLon from 'geodesy/latlon-spherical.js';
  * @returns {number} Random value from Gaussian distribution
  */
 export function gaussianRandom(mean = 0, stddev = 1) {
-  const u1 = Math.random();
-  const u2 = Math.random();
+  const u1 = 1 - random();  // (0, 1] keeps log() finite
+  const u2 = random();
   const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
   return z0 * stddev + mean;
 }
@@ -48,6 +71,18 @@ export function localToGps(px, py, lat0, lon0) {
   const lat = lat0 + py / CONFIG.METERS_PER_DEG_LAT;
   const lon = lon0 + px / (CONFIG.METERS_PER_DEG_LAT * cosLat0);
   return { lat, lon };
+}
+
+/**
+ * Moves a GPS point along its own speed and bearing for dt seconds.
+ * @param {Object} point - GPS point with lat, lon, speed (m/s), bearing (deg)
+ * @param {number} dt - Time in seconds
+ * @returns {{lat: number, lon: number}} Projected GPS coordinates
+ */
+export function projectByVelocity(point, dt) {
+  const bearing = (point.bearing || 0) * Math.PI / 180;
+  const dist = (point.speed || 0) * dt;
+  return localToGps(dist * Math.sin(bearing), dist * Math.cos(bearing), point.lat, point.lon);
 }
 
 /**

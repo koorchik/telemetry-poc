@@ -23,19 +23,25 @@ Simple linear interpolation between consecutive GPS points. Fast and effective f
 ### 2. Catmull-Rom Spline
 Smooth curve interpolation using four control points. Creates natural-looking trajectories.
 
-**Best for:** Clean GPS (< 1m error)
+**Best for:** Position-only GPS with little noise
 
-### 3. GPS-only Kalman Filter
-Classic Kalman filter with RTS (Rauch-Tung-Striebel) smoothing for optimal trajectory estimation.
+### 3. Cubic Hermite Spline
+Each segment matches both the positions and the GPS velocities (speed + bearing) at its two ends, so the curve leaves and enters every fix in the direction the car was actually travelling.
 
-### 4. INS/GPS Sensor Fusion (EKF)
-7-state Extended Kalman Filter that fuses GPS position with IMU data:
-- State vector: `[px, py, vx, vy, ψ, b_ax, b_ay]`
-- Uses accelerometer for dead reckoning between GPS updates
-- Uses gyroscope for heading estimation
-- Estimates accelerometer bias
+**Best for:** Clean GPS that also reports speed and bearing
 
-**Note:** EKF performs best when IMU calibration is accurate. With smartphone-grade sensors, simple interpolation often outperforms EKF.
+### 4. INS/GPS Sensor Fusion (EKF + RTS smoother)
+6-state Extended Kalman Filter with a vehicle motion model (the car moves along its course):
+- State vector: `[px, py, v, ψ, b_g, b_a]`
+- Gyroscope steers the course, longitudinal accelerometer changes the speed
+- GPS position, speed and course are all used as measurements
+- Estimates gyroscope and accelerometer bias
+
+Two outputs are compared:
+- **EKF Raw** - forward filter, uses only past GPS fixes (real-time capable)
+- **EKF + RTS** - Rauch-Tung-Striebel backward pass, also uses later fixes (post-processing)
+
+**Best for:** Noisy GPS
 
 ### 5. Physics-Based Outlier Detection
 
@@ -52,23 +58,25 @@ Each check produces a score, and points exceeding the weighted threshold are rej
 
 ## Results
 
-See [RESULTS.md](RESULTS.md) for detailed benchmark results.
+Sample recording (car, 5 laps), GPS downsampled to 1 Hz, mean RMSE over laps. Reproduce with `node scripts/benchmark.js`.
 
-### Summary (Average RMSE)
-
-| Noise Level | Linear | Spline | Best |
-|-------------|--------|--------|------|
-| Clean GPS | 0.44m | 0.39m | Spline |
-| Light (1-3m) | 2.33m | 2.57m | Linear |
-| Medium (3-8m) | 6.41m | 7.07m | Linear |
-| Heavy (5-15m) | 11.19m | 12.40m | Linear |
+| GPS | Linear | Catmull-Rom | Hermite | EKF Raw | EKF + RTS |
+|-----|--------|-------------|---------|---------|-----------|
+| Clean | 0.62m | 0.26m | 0.06m | 0.21m | 0.08m |
+| Noisy (2m per axis) | 2.48m | 2.65m | 2.51m | 1.65m | 0.96m |
 
 ### Key Findings
 
-1. **Spline wins for clean GPS** - Sub-meter accuracy with high-quality GPS
-2. **Linear wins for noisy GPS** - Spline amplifies noise, linear smooths it
-3. **RMSE ≈ Noise Level** - With 5m noise, expect ~5-6m RMSE after interpolation
-4. **EKF needs calibration** - IMU drift often exceeds interpolation error
+1. **GPS velocity matters for clean GPS** - Hermite is 4x more accurate than Catmull-Rom from the same fixes
+2. **Interpolation cannot remove noise** - Every interpolator passes through the noisy fixes, so its error equals the GPS error
+3. **Sensor fusion wins for noisy GPS** - The smoother cuts the error by about 60%; the forward filter by about 35%
+4. **Timing matters more than tuning** - Rows are not 25 Hz (see below) and the channels are not aligned in time; fixing both changed the EKF error far more than any noise parameter
+
+The simulated noise is white (independent per fix), which is the easiest case for a filter. Real GPS error drifts slowly, and no IMU can see a constant position offset, so expect smaller gains on real noisy receivers.
+
+### Data timing
+
+A RaceChrono export has one row per sample of *any* device, about 45 rows/s for this recording, irregularly spaced. Each lap is resampled onto a uniform 25 Hz grid before anything else. Channels also lag behind GPS position by different amounts (GPS speed/bearing ~90 ms, accelerations ~100 ms, gyroscope ~20 ms); these delays are set in `CONFIG.sampling` and are specific to the logging devices.
 
 ## Usage
 
@@ -100,10 +108,12 @@ node src/index.js 3    # Process specific lap
 ### Run Benchmark
 
 ```bash
-node benchmark.js
+npm install
+node scripts/benchmark.js              # sample data
+node scripts/benchmark.js my-session.csv
 ```
 
-Generates `RESULTS.md` with metrics for all laps and noise levels.
+Prints RMSE per lap and a metrics table for clean and noisy GPS, with a fixed noise seed.
 
 ### View Results
 
@@ -137,8 +147,7 @@ telemetry-poc/
 │   ├── config.js           # Configuration
 │   └── index.js            # Node.js CLI entry
 ├── map.html                # Generated visualization (CLI)
-├── benchmark.js            # Benchmark runner
-├── RESULTS.md              # Benchmark results
+├── scripts/benchmark.js    # Benchmark runner (Node.js)
 └── race-chrono-session-v3.csv  # Sample data
 ```
 
@@ -158,10 +167,11 @@ const CONFIG = {
     maxMeters: 8,   // Maximum noise (m)
   },
   ekf: {
-    sigma_accel: 0.5,    // Accelerometer noise (m/s²)
-    sigma_gyro: 0.02,    // Gyroscope noise (rad/s)
-    sigma_bias: 0.001,   // Bias random walk
-    gps_pos_noise: 5.0,  // GPS position noise (m)
+    sigma_speed: 1.0,        // Accelerometer error (m/s per sqrt(s))
+    sigma_course_deg: 3.0,   // Gyro error + slip angle (deg per sqrt(s))
+    gps_pos_noise: 5.0,      // GPS position noise without accuracy (m)
+    gps_speed_noise: 0.3,    // GPS speed noise (m/s)
+    gps_course_noise_deg: 1.5, // GPS course noise (deg)
   },
   outlierDetection: {
     enabled: true,

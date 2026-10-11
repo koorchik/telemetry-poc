@@ -5,9 +5,11 @@
  */
 
 import { parseCSVString } from '../io/csv-parser.js';
-import { downsampleGPS, addGPSNoise, filterGPSOutliers } from '../gps/index.js';
+import { downsampleGPS, addGPSNoise, filterGPSOutliers, resampleUniform } from '../gps/index.js';
 import { enhanceTelemetryPoints, createChartData } from '../analysis/distance.js';
 import { runAllAlgorithms } from '../runner.js';
+import { seedRandom } from '../math/geometry.js';
+import CONFIG from '../config.js';
 
 /**
  * Default configuration for browser processing.
@@ -32,8 +34,11 @@ function processLap(fullDataRaw, lapNumber) {
   const t0 = lapDataRaw[0].timestamp;
   lapDataRaw.forEach(p => p.timestamp -= t0);
 
+  // RaceChrono rows are irregular (~45/s); put them on a uniform grid
+  const lapDataUniform = resampleUniform(lapDataRaw, CONFIG.sampling.imuHz, CONFIG.sampling.imuDelay);
+
   // Enhance telemetry with distance, position, and lap time
-  const { points: lapData, totalDistance, duration } = enhanceTelemetryPoints(lapDataRaw);
+  const { points: lapData, totalDistance, duration } = enhanceTelemetryPoints(lapDataUniform);
 
   // Create chart data (downsampled to 2Hz for performance)
   const chartData = createChartData(lapData, 2);
@@ -63,10 +68,12 @@ function processLap(fullDataRaw, lapNumber) {
     noisyGPS,
     cleanLinear: cleanResults.linear,
     cleanSpline: cleanResults.spline,
+    cleanHermite: cleanResults.hermite,
     cleanEkfRaw: cleanResults.ekfRaw,
     cleanEkfSmooth: cleanResults.ekfSmooth,
     noisyLinear: noisyResults.linear,
     noisySpline: noisyResults.spline,
+    noisyHermite: noisyResults.hermite,
     noisyEkfRaw: noisyResults.ekfRaw,
     noisyEkfSmooth: noisyResults.ekfSmooth,
     cleanMetrics: cleanResults.metrics,
@@ -89,6 +96,7 @@ function processLap(fullDataRaw, lapNumber) {
  */
 export function processCSV(csvText, config = {}, onProgress = () => {}) {
   const cfg = { ...DEFAULT_CONFIG, ...config };
+  seedRandom(CONFIG.noise.seed);
 
   // 1. Parse CSV
   onProgress('parsing', 'Parsing CSV data...');
@@ -125,7 +133,9 @@ export function processCSV(csvText, config = {}, onProgress = () => {}) {
   const t0 = fullDataRaw2[0].timestamp;
   fullDataRaw2.forEach(p => p.timestamp -= t0);
 
-  const { points: fullData, totalDistance } = enhanceTelemetryPoints(fullDataRaw2);
+  const { points: fullData, totalDistance } = enhanceTelemetryPoints(
+    resampleUniform(fullDataRaw2, CONFIG.sampling.imuHz, CONFIG.sampling.imuDelay)
+  );
 
   const gpsDownsampled = downsampleGPS(fullData);
   const cleanOutliers = filterGPSOutliers(gpsDownsampled);
