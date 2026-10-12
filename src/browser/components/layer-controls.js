@@ -19,6 +19,7 @@ export class LayerControls extends LitElement {
     delays: { type: Object },
     noise: { type: Object },
     _openInfo: { state: true },
+    _expanded: { state: true },
   };
 
   constructor() {
@@ -27,6 +28,8 @@ export class LayerControls extends LitElement {
     this.delays = null;
     this.noise = null;
     this._openInfo = null;
+    // Only the phone layout collapses the list; the stylesheet ignores this on wide screens
+    this._expanded = false;
     this._onKeyDown = (e) => {
       if (e.code === 'Escape') this._openInfo = null;
     };
@@ -79,29 +82,37 @@ export class LayerControls extends LitElement {
 
   render() {
     return html`
-      <div class="map-overlay">
-        <h4>Layers</h4>
-        ${Object.entries(this.layers).map(([key, cfg]) => html`
-          <div class="layer-row">
-            <label class="layer-checkbox">
-              <input
-                type="checkbox"
-                ?checked="${this.visibility[key]}"
-                @change="${(e) => this._handleChange(key, e.target.checked)}"
-              >
-              <span class="color-dot" style="background: ${cfg.color};"></span>
-              <span>${cfg.label}</span>
-            </label>
-            <button
-              class="layer-info-btn ${this._openInfo === key ? 'active' : ''}"
-              title="How is this calculated?"
-              aria-label="How is ${cfg.label} calculated?"
-              aria-expanded="${this._openInfo === key}"
-              @click="${() => this._toggleInfo(key)}"
-              @keydown="${(e) => { if (e.code === 'Space') e.stopPropagation(); }}"
-            >i</button>
-          </div>
-        `)}
+      <div class="map-overlay ${this._expanded ? '' : 'collapsed'}">
+        <h4 class="layers-title">Layers</h4>
+        <button
+          class="layers-toggle"
+          aria-expanded="${this._expanded}"
+          @click="${() => this._expanded = !this._expanded}"
+          @keydown="${(e) => { if (e.code === 'Space') e.stopPropagation(); }}"
+        ><span>Layers</span><span aria-hidden="true">${this._expanded ? '▴' : '▾'}</span></button>
+        <div class="layer-list">
+          ${Object.entries(this.layers).map(([key, cfg]) => html`
+            <div class="layer-row">
+              <label class="layer-checkbox">
+                <input
+                  type="checkbox"
+                  ?checked="${this.visibility[key]}"
+                  @change="${(e) => this._handleChange(key, e.target.checked)}"
+                >
+                <span class="color-dot" style="background: ${cfg.color};"></span>
+                <span>${cfg.label}</span>
+              </label>
+              <button
+                class="layer-info-btn ${this._openInfo === key ? 'active' : ''}"
+                title="How is this calculated?"
+                aria-label="How is ${cfg.label} calculated?"
+                aria-expanded="${this._openInfo === key}"
+                @click="${() => this._toggleInfo(key)}"
+                @keydown="${(e) => { if (e.code === 'Space') e.stopPropagation(); }}"
+              >i</button>
+            </div>
+          `)}
+        </div>
         ${this._renderInfo()}
       </div>
     `;

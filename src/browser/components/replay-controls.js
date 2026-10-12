@@ -26,24 +26,6 @@ export class ReplayControls extends LitElement {
     this.isPlaying = false;
     this.playbackSpeed = 1;
     this._isDragging = false;
-    this._onMouseMove = this._onMouseMove.bind(this);
-    this._onMouseUp = this._onMouseUp.bind(this);
-  }
-
-  connectedCallback() {
-    super.connectedCallback();
-    document.addEventListener('mousemove', this._onMouseMove);
-    document.addEventListener('mouseup', this._onMouseUp);
-    document.addEventListener('touchmove', this._onMouseMove, { passive: false });
-    document.addEventListener('touchend', this._onMouseUp);
-  }
-
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    document.removeEventListener('mousemove', this._onMouseMove);
-    document.removeEventListener('mouseup', this._onMouseUp);
-    document.removeEventListener('touchmove', this._onMouseMove);
-    document.removeEventListener('touchend', this._onMouseUp);
   }
 
   _formatTime(seconds) {
@@ -76,19 +58,22 @@ export class ReplayControls extends LitElement {
     eventBus.emit('seek', { time: this.currentTime + 1 });
   }
 
-  _onTimelineMouseDown(e) {
+  // Mouse, finger and pen alike. The pointer is captured, so the drag goes on
+  // outside the bar; the bar has touch-action: none, so it never scrolls the page.
+  _onTimelinePointerDown(e) {
+    if (e.button !== 0) return;
     e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     this._isDragging = true;
     this._seekFromEvent(e);
   }
 
-  _onMouseMove(e) {
+  _onTimelinePointerMove(e) {
     if (!this._isDragging) return;
-    e.preventDefault();
     this._seekFromEvent(e);
   }
 
-  _onMouseUp() {
+  _onTimelinePointerUp() {
     this._isDragging = false;
   }
 
@@ -97,8 +82,7 @@ export class ReplayControls extends LitElement {
     if (!timeline) return;
 
     const rect = timeline.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     eventBus.emit('seek', { time: pct * this.duration });
   }
 
@@ -157,8 +141,10 @@ export class ReplayControls extends LitElement {
         <div class="timeline-container">
           <div
             class="timeline"
-            @mousedown="${this._onTimelineMouseDown}"
-            @touchstart="${this._onTimelineMouseDown}"
+            @pointerdown="${this._onTimelinePointerDown}"
+            @pointermove="${this._onTimelinePointerMove}"
+            @pointerup="${this._onTimelinePointerUp}"
+            @pointercancel="${this._onTimelinePointerUp}"
           >
             <div class="timeline-progress" style="width: ${pct}%"></div>
             <div class="timeline-thumb" style="left: ${pct}%"></div>
