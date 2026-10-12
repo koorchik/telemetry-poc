@@ -8,6 +8,9 @@ import { LitElement, html } from 'lit';
 import chroma from 'chroma-js';
 import { eventBus } from './event-bus.js';
 
+// How far from the track a click still seeks to it. A finger cannot hit a line a few pixels wide.
+const SEEK_TOLERANCE_PX = 20;
+
 export class TrackMap extends LitElement {
   // Use light DOM for Leaflet compatibility
   createRenderRoot() {
@@ -40,6 +43,7 @@ export class TrackMap extends LitElement {
     this._carMarker = null;
     this._comparisonMarker = null;
     this._fittedLap = null;
+    this._resizeObserver = null;
 
     this._layerConfig = {
       groundTruth: { label: 'Ground Truth (25Hz)', color: '#22c55e' },
@@ -55,6 +59,8 @@ export class TrackMap extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
     if (this._map) {
       this._map.remove();
       this._map = null;
@@ -85,6 +91,11 @@ export class TrackMap extends LitElement {
     if (!mapEl || typeof L === 'undefined') return;
 
     this._map = L.map(mapEl);
+    this._map.on('click', (e) => this._onMapClick(e));
+
+    // Leaflet only follows window resizes; the panel also changes size when the layout does
+    this._resizeObserver = new ResizeObserver(() => this._map?.invalidateSize());
+    this._resizeObserver.observe(mapEl);
 
     // Base tile layers
     const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -205,14 +216,6 @@ export class TrackMap extends LitElement {
       this._map.fitBounds(gt, { padding: [30, 30] });
       this._fittedLap = lapKey;
     }
-
-    // Trajectory click handlers
-    const onTrajectoryClick = (e) => this._onTrajectoryClick(e);
-    this._layers.groundTruth.on('click', onTrajectoryClick);
-    this._layers.spline.on('click', onTrajectoryClick);
-    this._layers.hermite.on('click', onTrajectoryClick);
-    this._layers.ekfRaw.on('click', onTrajectoryClick);
-    this._layers.ekfSmooth.on('click', onTrajectoryClick);
   }
 
   _createSpeedGradientTrack(data, opacity = 0.9) {
@@ -317,21 +320,22 @@ export class TrackMap extends LitElement {
     });
   }
 
-  _onTrajectoryClick(e) {
+  // Seeks to the ground-truth point nearest to a click on or next to the track
+  _onMapClick(e) {
     if (!this.lapData?.fullGroundTruth) return;
 
-    let minDist = Infinity;
-    let nearestPos = 0;
+    let minDist = SEEK_TOLERANCE_PX;
+    let nearest = null;
 
     this.lapData.fullGroundTruth.forEach(p => {
-      const dist = Math.pow(e.latlng.lat - p.lat, 2) + Math.pow(e.latlng.lng - p.lon, 2);
-      if (dist < minDist) {
+      const dist = this._map.latLngToContainerPoint([p.lat, p.lon]).distanceTo(e.containerPoint);
+      if (dist <= minDist) {
         minDist = dist;
-        nearestPos = p.lapPosition;
+        nearest = p;
       }
     });
 
-    eventBus.emit('seek-position', { position: nearestPos });
+    if (nearest) eventBus.emit('seek-position', { position: nearest.lapPosition });
   }
 
   render() {

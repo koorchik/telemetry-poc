@@ -19,7 +19,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .header {
   grid-column: 1 / -1;
   background: linear-gradient(135deg, #16213e 0%, #1a1a2e 100%);
-  padding: 12px 20px;
+  /* the right side is kept free for #back-btn (index.html), which is fixed there */
+  padding: 12px 185px 12px 20px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -48,6 +49,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   max-width: 230px;
 }
 .map-overlay h4 { font-size: 11px; color: #718096; text-transform: uppercase; margin-bottom: 8px; }
+.layers-toggle { display: none; }
 
 .layer-checkbox {
   display: flex;
@@ -258,7 +260,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   border-radius: 3px;
   cursor: pointer;
   position: relative;
+  touch-action: none;
 }
+.timeline::before { content: ''; position: absolute; inset: -14px 0; }
 .timeline-progress {
   height: 100%;
   background: #3b82f6;
@@ -425,6 +429,158 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   font-weight: 600;
 }
 .metrics-header:first-of-type { margin-top: 0; }
+
+/* Repeated taps on a control must not trigger the browser's double-tap zoom */
+button, select, .layer-checkbox { touch-action: manipulation; }
+
+/*
+ * Phone layout. The page itself scrolls; the header, the map and the replay bar stay
+ * pinned, so the map and the chart cursor are visible together.
+ * <replay-controls> and <lap-selector> are the flex/grid items here, not the divs inside
+ * them. The same media condition is used for #back-btn in index.html.
+ */
+@media (max-width: 900px), (orientation: landscape) and (max-height: 500px) {
+  .app-container {
+    --header-h: 44px;
+    --replay-h: 56px;
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  replay-controls, lap-selector { display: block; }
+
+  /* Leaflet panes and the chart wrappers are positioned, so the pinned blocks need an
+     explicit z-index. The map is above the replay bar because the methodology sheet,
+     which may cover that bar, lives inside the map panel. */
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 25;
+    flex: none;
+    height: var(--header-h);
+    padding: 0 52px 0 12px;
+    gap: 8px;
+  }
+  .header h1 { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .delta-display { font-size: 14px; padding: 4px 10px; min-width: 72px; }
+
+  .map-panel {
+    order: 1;
+    position: sticky;
+    top: var(--header-h);
+    z-index: 30;
+    flex: none;
+    /* svh, not dvh: the map must not resize while the browser's address bar slides away */
+    height: 42vh;
+    height: 42svh;
+    min-height: 0;
+  }
+  lap-selector { order: 2; }
+  .charts-panel { order: 3; flex: 1; overflow: visible; border-left: none; padding: 12px; }
+  replay-controls { order: 4; position: sticky; bottom: 0; z-index: 20; }
+
+  /* Pinch zoom replaces the buttons, which would sit under the layers toggle */
+  .map-panel .leaflet-control-zoom { display: none; }
+
+  .map-overlay {
+    top: 8px;
+    left: 8px;
+    padding: 0;
+    max-width: min(260px, calc(100% - 16px));
+    max-height: calc(100% - 16px);
+    overflow-y: auto;
+  }
+  .map-overlay h4.layers-title { display: none; }
+  .layers-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    min-height: 36px;
+    padding: 0 12px;
+    border: none;
+    background: none;
+    color: #eee;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .map-overlay.collapsed .layer-list { display: none; }
+  .layer-list { padding: 0 12px 6px; }
+  .layer-checkbox { font-size: 14px; padding: 7px 0; }
+  .layer-info-btn { width: 26px; height: 26px; font-size: 14px; }
+
+  .layer-info-panel {
+    position: fixed;
+    top: calc(var(--header-h) + 8px);
+    left: 8px;
+    right: 8px;
+    width: auto;
+    min-width: 0;
+    max-height: calc(100vh - var(--header-h) - 16px);
+    max-height: calc(100svh - var(--header-h) - 16px);
+  }
+  .layer-info-body { font-size: 13px; }
+  .layer-info-close { font-size: 24px; padding: 4px 8px; }
+
+  .footer-controls { padding: 10px 12px; gap: 8px; border-top: none; border-bottom: 1px solid #2d3748; }
+  .lap-selectors { flex: 1 1 100%; gap: 8px; }
+  .lap-selector-group, .mode-toggle { flex: 1 1 130px; min-width: 0; }
+  /* Noise: wide enough for its longest option, or it takes a row of its own */
+  .lap-selector-group:last-child { flex: 1 1 206px; }
+  /* 16px: iOS Safari zooms the page when a smaller form control gets focus */
+  .lap-select { flex: 1; min-width: 0; min-height: 40px; padding: 6px 8px; font-size: 16px; }
+  .mode-btn { flex: 1; min-height: 40px; padding: 8px 6px; white-space: nowrap; }
+  .lap-info { gap: 4px 16px; }
+
+  .telemetry-display { padding: 10px; gap: 8px; }
+  .telemetry-item .value { font-size: 20px; }
+  .metrics-table th, .metrics-table td { padding: 6px 4px; }
+
+  /* Two rows: the timeline, then the buttons */
+  .replay-controls {
+    --btn: clamp(28px, 8.5vw, 40px);
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 6px 8px;
+    padding: 8px 10px;
+  }
+  .timeline-container { order: -1; flex: 1 0 100%; }
+  .timeline-thumb { width: 20px; height: 20px; }
+  .time-display { min-width: 0; font-size: 12px; white-space: nowrap; }
+  .replay-buttons { gap: 4px; }
+  .replay-btn { width: var(--btn); height: var(--btn); }
+  .replay-btn.play-pause { width: calc(var(--btn) + 8px); height: calc(var(--btn) + 8px); }
+  .speed-btn { width: clamp(28px, 8vw, 40px); height: 32px; padding: 0; }
+}
+
+/* Phone held sideways: the map is pinned on the left, the other column scrolls */
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-container {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr auto;
+  }
+  .map-panel {
+    grid-column: 1;
+    grid-row: 1 / 4;
+    align-self: start;
+    top: 0;
+    height: calc(100vh - var(--replay-h));
+    height: calc(100svh - var(--replay-h));
+  }
+  .header { grid-column: 2; grid-row: 1; }
+  lap-selector { grid-column: 2; grid-row: 2; }
+  .charts-panel { grid-column: 2; grid-row: 3; }
+  replay-controls { grid-column: 1 / -1; grid-row: 4; }
+
+  .replay-controls { flex-wrap: nowrap; height: var(--replay-h); padding: 0 12px; gap: 12px; }
+  .timeline-container { order: 0; flex: 1 1 0; }
+}
 `;
 
 /**
